@@ -300,7 +300,7 @@ export default function App() {
     const targetAuction = auctions.find(a => a.id === aucId);
 
     if (!numericBid || numericBid <= targetAuction.currentBid) {
-      alert(`Bid must be higher than current price ($${targetAuction.currentBid})`);
+      alert(`Bid must be higher than current price (₹${targetAuction.currentBid})`);
       return;
     }
 
@@ -320,7 +320,7 @@ export default function App() {
 
     setBiddingAuctionId(null);
     setAuctionBidAmount('');
-    showNotification(`Bid placed successfully for $${numericBid}!`);
+    showNotification(`Bid placed successfully for ₹${numericBid}!`);
   };
 
   return (
@@ -505,7 +505,7 @@ export default function App() {
                 <div className="w-full md:w-64 bg-slate-950 border border-slate-800 p-3 rounded-xl flex flex-col gap-1">
                   <div className="flex justify-between text-xs text-slate-400">
                     <span>Max Price</span>
-                    <span className="text-amber-400 font-bold">${maxPriceFilter}</span>
+                    <span className="text-amber-400 font-bold">₹{maxPriceFilter}</span>
                   </div>
                   <input
                     type="range"
@@ -599,7 +599,7 @@ export default function App() {
                     <div className="flex items-center justify-between pt-3 border-t border-slate-800/80">
                       <div>
                         <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Price</span>
-                        <span className="text-lg font-extrabold text-amber-400">${art.price}</span>
+                        <span className="text-lg font-extrabold text-amber-400">₹{art.price}</span>
                       </div>
                       <button 
                         onClick={() => showNotification(`Inquiry sent to ${art.artistName} for ${art.title}`)}
@@ -670,7 +670,7 @@ export default function App() {
                     <div className="flex items-center gap-4 bg-slate-950 px-4 py-2 rounded-xl border border-slate-800 self-start md:self-auto">
                       <div>
                         <span className="text-[10px] text-slate-500 uppercase block">Target Budget</span>
-                        <span className="text-sm font-bold text-amber-400">${req.budgetMin} - ${req.budgetMax}</span>
+                        <span className="text-sm font-bold text-amber-400">₹{req.budgetMin} - ₹{req.budgetMax}</span>
                       </div>
                       <div className="h-6 w-px bg-slate-800" />
                       <div>
@@ -716,7 +716,7 @@ export default function App() {
                                 <img src={bid.artistAvatar} className="w-6 h-6 rounded-full" />
                                 <span className="text-xs font-semibold text-slate-200">{bid.artistName}</span>
                               </div>
-                              <span className="text-sm font-extrabold text-amber-400">${bid.amount}</span>
+                              <span className="text-sm font-extrabold text-amber-400">₹{bid.amount}</span>
                             </div>
                             <p className="text-xs text-slate-400 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800/80">
                               "{bid.proposal}"
@@ -784,7 +784,7 @@ export default function App() {
                         <span className="text-xs text-slate-400">{auc.totalBids} bids</span>
                       </div>
                       <div className="flex items-baseline justify-between">
-                        <span className="text-xl font-black text-amber-400">${auc.currentBid}</span>
+                        <span className="text-xl font-black text-amber-400">₹{auc.currentBid}</span>
                         <span className="text-[11px] text-slate-400">By {auc.highestBidder}</span>
                       </div>
                     </div>
@@ -794,7 +794,7 @@ export default function App() {
                         <div className="flex items-center gap-2 w-full">
                           <input
                             type="number"
-                            placeholder={`> $${auc.currentBid}`}
+                            placeholder={`> ₹${auc.currentBid}`}
                             value={auctionBidAmount}
                             onChange={(e) => setAuctionBidAmount(e.target.value)}
                             className="w-full bg-slate-950 border border-amber-500/60 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
@@ -1055,7 +1055,7 @@ export default function App() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Price ($ USD) *</label>
+                  <label className="text-xs text-slate-400 block mb-1">Price (₹ INR) *</label>
                   <input
                     type="number"
                     required
@@ -1137,7 +1137,7 @@ export default function App() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Preferred Budget Range ($)</label>
+                  <label className="text-xs text-slate-400 block mb-1">Preferred Budget Range (₹)</label>
                   <input
                     type="number"
                     required
@@ -1195,7 +1195,7 @@ export default function App() {
             <form onSubmit={handleSubmitCommissionBid} className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Your Price Quote ($)</label>
+                  <label className="text-xs text-slate-400 block mb-1">Your Price Quote (₹)</label>
                   <input
                     type="number"
                     required
