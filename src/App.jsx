@@ -1,1257 +1,1081 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Search, MapPin, SlidersHorizontal, ShieldCheck, Heart, Sparkles, PlusCircle, 
-  MessageSquare, Gavel, Tag, User, Lock, Phone, CheckCircle2, Clock, 
-  ExternalLink, ChevronRight, Filter, AlertCircle, ShoppingBag, Eye, Send,
-  Layers, Palette, Compass, ArrowRight, Zap, Image as ImageIcon, Award, X
+  Search, Shield, MapPin, Plus, Lock, Phone, User, Gavel, 
+  MessageSquare, Sliders, CheckCircle2, ChevronRight, Award, 
+  ArrowUpRight, Sparkles, Filter, Clock, Tag, Briefcase, Eye,
+  AlertCircle, ChevronDown, DollarSign, Heart, Share2, Zap,
+  Settings, Check, X, RefreshCw, Calendar, FileText
 } from 'lucide-react';
 
+// Optional Express + MongoDB API Endpoint (Falls back seamlessly to local mock data)
+const API_BASE_URL = "http://localhost:5000/api";
+
+// INITIAL MOCK DATA SETS
 const INITIAL_ARTWORKS = [
-  {
-    id: 'art-1',
-    title: 'Serenade of the Sunset Bay',
-    artistName: 'Elena Rostova',
-    artistAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-    location: 'Downtown Arts District (1.2 km)',
-    category: 'Oil Painting',
-    price: 450,
-    dimensions: '24" x 36"',
-    description: 'Textured canvas depicting the peaceful amber reflections along the city harbor during golden hour.',
-    image: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&q=80&w=800',
-    verified: true,
-    likes: 34
+  { 
+    id: 'art-1', 
+    title: 'Sunset over Western Ghats', 
+    artist: 'Rohan Verma', 
+    category: 'Oil Painting', 
+    price: 12500, 
+    medium: 'Canvas & Oil', 
+    dimensions: '24x36 in', 
+    location: 'Indiranagar, Bengaluru', 
+    imageUrl: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80', 
+    description: 'Hand-painted serene sunset depiction of the Western Ghats range using thick palette knife technique.',
+    likes: 42
   },
-  {
-    id: 'art-2',
-    title: 'Minimalist Terracotta Vessel',
-    artistName: 'Marcus Vance',
-    artistAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-    location: 'Westside Craft Hub (3.5 km)',
-    category: 'Pottery',
-    price: 180,
-    dimensions: '12" Height, 8" Diameter',
-    description: 'Hand-thrown earthenware clay vase finished with natural organic glazes and textured matte finish.',
-    image: 'https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?auto=format&fit=crop&q=80&w=800',
-    verified: true,
-    likes: 52
+  { 
+    id: 'art-2', 
+    title: 'Terracotta Sculpted Mask', 
+    artist: 'Priya Nair', 
+    category: 'Sculpture', 
+    price: 4500, 
+    medium: 'Natural Clay', 
+    dimensions: '12x8 in', 
+    location: 'Koramangala, Bengaluru', 
+    imageUrl: 'https://images.unsplash.com/photo-1544717305-2782549b5136?auto=format&fit=crop&w=800&q=80', 
+    description: 'Traditional eco-friendly terracotta artwork handcrafted locally by master heritage sculptors.',
+    likes: 29
   },
-  {
-    id: 'art-3',
-    title: 'Cybernetic Echoes #04',
-    artistName: 'Aria Chen',
-    artistAvatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&q=80&w=200',
-    location: 'Tech-Art Loft, North Suburb (4.8 km)',
-    category: 'Digital Art',
-    price: 310,
-    dimensions: 'Digital Print + NFT Verified (A2 Size)',
-    description: 'High-contrast futuristic urban landscape print on museum-grade metallic archival acrylic paper.',
-    image: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800',
-    verified: true,
-    likes: 89
+  { 
+    id: 'art-3', 
+    title: 'Monochromes of Old Market', 
+    artist: 'Arjun Das', 
+    category: 'Sketch', 
+    price: 3200, 
+    medium: 'Charcoal on Paper', 
+    dimensions: '18x24 in', 
+    location: 'Jayanagar, Bengaluru', 
+    imageUrl: 'https://images.unsplash.com/photo-1578926375605-eaf7559b1458?auto=format&fit=crop&w=800&q=80', 
+    description: 'Detailed charcoal sketch capturing early morning bustle in historic South Bengaluru bazaar.',
+    likes: 67
   },
-  {
-    id: 'art-4',
-    title: 'Kinetic Bronze Solace',
-    artistName: 'Devon Wright',
-    artistAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200',
-    location: 'Old Town Foundry (2.1 km)',
-    category: 'Sculpture',
-    price: 950,
-    dimensions: '18" x 14" x 10"',
-    description: 'Hand-cast bronze figurine exploring balance and tension, set upon an oxidized basalt stone pedestal.',
-    image: 'https://images.unsplash.com/photo-1544717305-2782549b5136?auto=format&fit=crop&q=80&w=800',
-    verified: true,
-    likes: 41
+  { 
+    id: 'art-4', 
+    title: 'Cyberpunk Bengaluru Skyline', 
+    artist: 'Kavya Rao', 
+    category: 'Digital Art', 
+    price: 8500, 
+    medium: 'Giclée Print Edition 1/10', 
+    dimensions: '20x30 in', 
+    location: 'Whitefield, Bengaluru', 
+    imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80', 
+    description: 'Futuristic neon digital rendering of tech parks blended with ancient banyan trees.',
+    likes: 88
+  },
+  { 
+    id: 'art-5', 
+    title: 'Handmade Glazed Ceramic Urn', 
+    artist: 'Suresh Hegde', 
+    category: 'Ceramics', 
+    price: 6000, 
+    medium: 'Stoneware Clay', 
+    dimensions: '14x10 in', 
+    location: 'HSR Layout, Bengaluru', 
+    imageUrl: 'https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?auto=format&fit=crop&w=800&q=80', 
+    description: 'High-fired stoneware ceramic urn glazed with organic indigo mineral dyes.',
+    likes: 15
   }
 ];
 
-const INITIAL_REQUESTS = [
-  {
-    id: 'req-1',
-    buyerName: 'Sophia Martinez',
-    buyerAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=200',
-    location: 'Riverside Park (0.8 km)',
-    title: 'Large Modern Abstract Mural for Living Room',
-    category: 'Oil Painting',
-    budgetMin: 600,
-    budgetMax: 1000,
-    deadline: '2026-11-15',
-    description: 'Looking for a dynamic 48x60 canvas artwork featuring muted earth tones, warm brass, and deep navy accents to complement modern interior decor.',
+const INITIAL_BUYER_REQUESTS = [
+  { 
+    id: 'req-1', 
+    buyerName: 'Aditya Rao', 
+    title: 'Custom Abstract Canvas for Living Room', 
+    category: 'Modern Art', 
+    budgetMin: 8000, 
+    budgetMax: 15000, 
+    deadline: '2026-11-15', 
+    location: 'HSR Layout, Bengaluru', 
+    description: 'Looking for a blue-gold themed modern abstract art piece (48x36 in) to complement warm indoor ambient lighting.',
+    status: 'open',
     bids: [
-      {
-        id: 'bid-101',
-        artistName: 'Elena Rostova',
-        artistAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-        amount: 850,
-        timeline: '18 Days',
-        proposal: 'I specialize in large layered oil textures. I can prepare a thumbnail color scheme composition before starting the canvas rendering.'
-      }
+      { id: 'bid-1', artistName: 'Rohan Verma', amount: 12000, daysEst: 8, proposal: 'I can use metallic gold leaf accents over rich deep ultramarine acrylics on premium cotton canvas.' },
+      { id: 'bid-2', artistName: 'Kavya Rao', amount: 9500, daysEst: 5, proposal: 'I will create a high-resolution mixed media texture with geometric fluid dynamics.' }
     ]
   },
-  {
-    id: 'req-2',
-    buyerName: 'David Kim',
-    buyerAvatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&q=80&w=200',
-    location: 'Midtown Promenade (2.4 km)',
-    title: 'Custom Handcrafted Oak & Epoxy Resin Coffee Table',
-    category: 'Sculpture',
-    budgetMin: 1200,
-    budgetMax: 1800,
-    deadline: '2026-12-01',
-    description: 'Seeking a craftsman to create a live-edge walnut or oak tabletop infused with subtle smoky grey epoxy resin filler.',
-    bids: []
+  { 
+    id: 'req-2', 
+    buyerName: 'Meera Deshmukh', 
+    title: 'Hand-Carved Wooden Temple Arch', 
+    category: 'Sculpture', 
+    budgetMin: 20000, 
+    budgetMax: 35000, 
+    deadline: '2026-12-01', 
+    location: 'Malleshwaram, Bengaluru', 
+    description: 'Need a traditional teakwood carved miniature temple frame with intricate floral border details.',
+    status: 'open',
+    bids: [
+      { id: 'bid-3', artistName: 'Priya Nair', amount: 28000, daysEst: 14, proposal: 'Crafted using seasoned Rosewood with hand-rubbed natural beeswax polish finish.' }
+    ]
   }
 ];
 
 const INITIAL_AUCTIONS = [
-  {
-    id: 'auc-1',
-    title: 'The Solitude of Winter Pines (Edition 1/1)',
-    artistName: 'Elena Rostova',
-    artistAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-    location: 'Downtown Arts District',
-    startingPrice: 500,
-    currentBid: 1250,
-    highestBidder: 'Collector_99',
-    totalBids: 14,
-    endsInSeconds: 32000, // Dynamic timer countdown
-    image: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&q=80&w=800',
-    description: 'Exclusive masterwork oil painting showcased at the City Contemporary Art Fair. Authenticated certificate included.'
+  { 
+    id: 'auc-1', 
+    title: 'Heritage Brass Sculpted Idol - Edition 1/5', 
+    artist: 'Master Craft Guild', 
+    category: 'Limited Edition', 
+    currentBid: 28000, 
+    startingBid: 15000, 
+    endTime: new Date(Date.now() + 86400000).toISOString(), 
+    imageUrl: 'https://images.unsplash.com/photo-1561839561-b13bcfe95249?auto=format&fit=crop&w=800&q=80', 
+    bidsCount: 12,
+    description: 'Lost-wax casting method heritage sculpture with custom serial engraving and physical certificate of authenticity.'
   },
-  {
-    id: 'auc-2',
-    title: 'Ethereal Glass Sphere Prism #01',
-    artistName: 'Marcus Vance',
-    artistAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-    location: 'Westside Craft Hub',
-    startingPrice: 300,
-    currentBid: 680,
-    highestBidder: 'ArtLover_SF',
-    totalBids: 9,
-    endsInSeconds: 18400,
-    image: 'https://images.unsplash.com/photo-1561214115-f2f134cc4912?auto=format&fit=crop&q=80&w=800',
-    description: 'Limited edition blown optical glass sculpture refracting spectrum reflections under sunlight.'
+  { 
+    id: 'auc-2', 
+    title: 'Gold-Foil Tanjore Painting - Royal Durbar', 
+    artist: 'Venkatesh S.', 
+    category: 'Heritage Craft', 
+    currentBid: 45000, 
+    startingBid: 25000, 
+    endTime: new Date(Date.now() + 172800000).toISOString(), 
+    imageUrl: 'https://images.unsplash.com/photo-1577083552431-6e5fd01aa342?auto=format&fit=crop&w=800&q=80', 
+    bidsCount: 19,
+    description: '22-carat gold foil studded with unpolished semi-precious Jaipur rubies on teakwood frame.'
   }
 ];
 
 export default function App() {
-  // App Core States
-  const [userRole, setUserRole] = useState('buyer'); // 'buyer' | 'artist'
-  const [activeTab, setActiveTab] = useState('marketplace'); // 'marketplace' | 'commissions' | 'auctions' | 'profile' | 'future'
+  // Current user persona and authentication state
+  const [currentUser, setCurrentUser] = useState({
+    id: 'usr-101',
+    name: 'Ananya Sharma',
+    role: 'buyer', // 'buyer' or 'artist'
+    phone: '+91 98765 43210',
+    isVerified: true,
+    location: 'Koramangala, Bengaluru',
+    bio: 'Passionate local art collector focusing on contemporary Indian acrylics and traditional handmade pottery.',
+    joinedDate: 'March 2024'
+  });
+
+  // Active Navigation Tab
+  const [activeTab, setActiveTab] = useState('marketplace'); // 'marketplace' | 'demands' | 'auctions' | 'profile' | 'future'
   
-  // Data States
-  const [artworks, setArtworks] = useState(INITIAL_ARTWORKS);
-  const [commissionRequests, setCommissionRequests] = useState(INITIAL_REQUESTS);
+  // App Data States
+  const [products, setProducts] = useState(INITIAL_ARTWORKS);
+  const [buyerRequests, setBuyerRequests] = useState(INITIAL_BUYER_REQUESTS);
   const [auctions, setAuctions] = useState(INITIAL_AUCTIONS);
 
-  // Verification & Auth Modal State
+  // Filter & Search States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [maxPriceFilter, setMaxPriceFilter] = useState(100000);
+
+  // Modal Control States
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [userPhone, setUserPhone] = useState('+1 (555) 234-5678');
-  const [isPhoneVerified, setIsPhoneVerified] = useState(true);
+  const [isAddArtOpen, setIsAddArtOpen] = useState(false);
+  const [isCreateRequestOpen, setIsCreateRequestOpen] = useState(false);
+  const [activeBidModalItem, setActiveBidModalItem] = useState(null);
+  const [selectedProductDetail, setSelectedProductDetail] = useState(null);
+
+  // Form Input States
+  const [newArtForm, setNewArtForm] = useState({
+    title: '', category: 'Oil Painting', price: '', medium: '', dimensions: '', description: '', imageUrl: ''
+  });
+  const [newReqForm, setNewReqForm] = useState({
+    title: '', category: 'Oil Painting', budgetMin: '', budgetMax: '', deadline: '', description: ''
+  });
+  const [bidForm, setBidForm] = useState({
+    amount: '', daysEst: '', proposal: ''
+  });
+  const [loginPhone, setLoginPhone] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState('');
 
-  // Marketplace Filter States
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [maxPriceFilter, setMaxPriceFilter] = useState(1500);
-
-  // Modals States
-  const [isAddArtModalOpen, setIsAddArtModalOpen] = useState(false);
-  const [isCommissionModalOpen, setIsCommissionModalOpen] = useState(false);
-  const [biddingAuctionId, setBiddingAuctionId] = useState(null);
-  const [auctionBidAmount, setAuctionBidAmount] = useState('');
-  const [activeCommissionBidding, setActiveCommissionBidding] = useState(null);
-
-  // Form States
-  const [newArtwork, setNewArtwork] = useState({
-    title: '', category: 'Oil Painting', price: '', dimensions: '', description: '', image: ''
-  });
-
-  const [newRequest, setNewRequest] = useState({
-    title: '', category: 'Oil Painting', budgetMin: '', budgetMax: '', deadline: '', description: ''
-  });
-
-  const [newCommissionBid, setNewCommissionBid] = useState({
-    amount: '', timeline: '', proposal: ''
-  });
-
-  // Notification Banner
-  const [notification, setNotification] = useState(null);
+  // Toast Notifications
+  const [toastMessage, setToastMessage] = useState(null);
 
   const showNotification = (msg) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(null), 4000);
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Helper function to format prices in INR (₹)
+  const formatPrice = (price) => `₹${Number(price).toLocaleString('en-IN')}`;
+
+  // Fetch initial data from Express API if backend server is online
   useEffect(() => {
-    const timer = setInterval(() => {
-      setAuctions(prev =>
-        prev.map(auc => ({
-          ...auc,
-          endsInSeconds: auc.endsInSeconds > 0 ? auc.endsInSeconds - 1 : 0
-        }))
-      );
-    }, 1000);
-    return () => clearInterval(timer);
+    fetch(`${API_BASE_URL}/artworks`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setProducts(data);
+      })
+      .catch(() => console.log("Backend offline: Operating with rich local sample dataset."));
+
+    fetch(`${API_BASE_URL}/custom-requests`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setBuyerRequests(data);
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE_URL}/auctions`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setAuctions(data);
+      })
+      .catch(() => {});
   }, []);
 
-  const formatCountdown = (seconds) => {
-    if (seconds <= 0) return 'Ended';
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return `${hrs}h ${mins}m ${secs}s`;
+  // Filter artworks catalog
+  const filteredProducts = products.filter(item => {
+    const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          item.artist.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          item.category.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = selectedCategory === 'All' || item.category === selectedCategory;
+    const matchesPrice = item.price <= maxPriceFilter;
+    return matchesSearch && matchesCategory && matchesPrice;
+  });
+
+  // Switch persona toggle
+  const toggleRole = () => {
+    const newRole = currentUser.role === 'buyer' ? 'artist' : 'buyer';
+    setCurrentUser(prev => ({ ...prev, role: newRole }));
+    showNotification(`Switched to ${newRole.toUpperCase()} View`);
   };
 
-  const filteredArtworks = useMemo(() => {
-    return artworks.filter(art => {
-      const matchesSearch = art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            art.artistName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            art.description.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesCategory = selectedCategory === 'All' || art.category === selectedCategory;
-      const matchesPrice = art.price <= maxPriceFilter;
-      return matchesSearch && matchesCategory && matchesPrice;
-    });
-  }, [artworks, searchQuery, selectedCategory, maxPriceFilter]);
-
-  // Handle Add New Artwork (Artist Mode)
-  const handleCreateArtwork = (e) => {
+  // Submit new artwork listing
+  const handleAddArtworkSubmit = async (e) => {
     e.preventDefault();
-    if (!newArtwork.title || !newArtwork.price) return;
-    
-    const artItem = {
+    const artData = {
       id: `art-${Date.now()}`,
-      title: newArtwork.title,
-      artistName: 'You (Elena Rostova)',
-      artistAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-      location: 'Downtown Arts District (0.5 km)',
-      category: newArtwork.category,
-      price: parseFloat(newArtwork.price),
-      dimensions: newArtwork.dimensions || 'Custom Size',
-      description: newArtwork.description || 'Handcrafted unique original piece.',
-      image: newArtwork.image || 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&q=80&w=800',
-      verified: true,
-      likes: 1
+      title: newArtForm.title,
+      artist: currentUser.name,
+      category: newArtForm.category,
+      price: Number(newArtForm.price),
+      medium: newArtForm.medium || 'Mixed Medium',
+      dimensions: newArtForm.dimensions || 'Custom Size',
+      description: newArtForm.description,
+      imageUrl: newArtForm.imageUrl || 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80',
+      location: currentUser.location,
+      likes: 0
     };
 
-    setArtworks([artItem, ...artworks]);
-    setIsAddArtModalOpen(false);
-    setNewArtwork({ title: '', category: 'Oil Painting', price: '', dimensions: '', description: '', image: '' });
-    showNotification('Artwork listed successfully on local marketplace!');
+    try {
+      await fetch(`${API_BASE_URL}/artworks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(artData)
+      });
+    } catch (err) {
+      console.log("Saved locally to state.");
+    }
+
+    setProducts([artData, ...products]);
+    setIsAddArtOpen(false);
+    setNewArtForm({ title: '', category: 'Oil Painting', price: '', medium: '', dimensions: '', description: '', imageUrl: '' });
+    showNotification("Artwork listed successfully on Hyper-Local Marketplace!");
   };
 
-  // Handle Post Commission Request (Buyer Mode)
-  const handleCreateCommissionRequest = (e) => {
+  // Submit custom demand request
+  const handleCreateRequestSubmit = async (e) => {
     e.preventDefault();
-    if (!newRequest.title || !newRequest.budgetMax) return;
-
-    const reqItem = {
+    const reqData = {
       id: `req-${Date.now()}`,
-      buyerName: 'You (Current Buyer)',
-      buyerAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200',
-      location: 'Local Neighborhood (1.0 km)',
-      title: newRequest.title,
-      category: newRequest.category,
-      budgetMin: parseFloat(newRequest.budgetMin || 0),
-      budgetMax: parseFloat(newRequest.budgetMax),
-      deadline: newRequest.deadline || 'Flexible',
-      description: newRequest.description,
+      buyerName: currentUser.name,
+      title: newReqForm.title,
+      category: newReqForm.category,
+      budgetMin: Number(newReqForm.budgetMin),
+      budgetMax: Number(newReqForm.budgetMax),
+      deadline: newReqForm.deadline,
+      description: newReqForm.description,
+      location: currentUser.location,
+      status: 'open',
       bids: []
     };
 
-    setCommissionRequests([reqItem, ...commissionRequests]);
-    setIsCommissionModalOpen(false);
-    setNewRequest({ title: '', category: 'Oil Painting', budgetMin: '', budgetMax: '', deadline: '', description: '' });
-    showNotification('Custom Art request posted to local verified artists!');
+    try {
+      await fetch(`${API_BASE_URL}/custom-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reqData)
+      });
+    } catch (err) {
+      console.log("Saved locally to state.");
+    }
+
+    setBuyerRequests([reqData, ...buyerRequests]);
+    setIsCreateRequestOpen(false);
+    setNewReqForm({ title: '', category: 'Oil Painting', budgetMin: '', budgetMax: '', deadline: '', description: '' });
+    showNotification("Custom demand posted successfully!");
   };
 
-  // Handle Artist Bidding on Buyer Request
-  const handleSubmitCommissionBid = (e) => {
+  // Artist Bids on Custom Demand
+  const handleBidSubmit = async (e) => {
     e.preventDefault();
-    if (!newCommissionBid.amount || !activeCommissionBidding) return;
+    if (!activeBidModalItem) return;
 
     const bidData = {
       id: `bid-${Date.now()}`,
-      artistName: 'You (Elena Rostova)',
-      artistAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-      amount: parseFloat(newCommissionBid.amount),
-      timeline: newCommissionBid.timeline || '2 Weeks',
-      proposal: newCommissionBid.proposal
+      artistName: currentUser.name,
+      amount: Number(bidForm.amount),
+      daysEst: Number(bidForm.daysEst),
+      proposal: bidForm.proposal
     };
 
-    setCommissionRequests(prev =>
-      prev.map(req => {
-        if (req.id === activeCommissionBidding.id) {
-          return { ...req, bids: [...req.bids, bidData] };
-        }
-        return req;
-      })
-    );
+    setBuyerRequests(prev => prev.map(req => {
+      const targetId = req.id || req._id;
+      const activeId = activeBidModalItem.id || activeBidModalItem._id;
+      if (targetId === activeId) {
+        return { ...req, bids: req.bids ? [...req.bids, bidData] : [bidData] };
+      }
+      return req;
+    }));
 
-    setActiveCommissionBidding(null);
-    setNewCommissionBid({ amount: '', timeline: '', proposal: '' });
-    showNotification('Your custom bid & proposal has been sent to the buyer!');
+    setActiveBidModalItem(null);
+    setBidForm({ amount: '', daysEst: '', proposal: '' });
+    showNotification("Proposal quote submitted to buyer!");
   };
 
   // Handle Auction Bidding
-  const handlePlaceAuctionBid = (aucId) => {
-    const numericBid = parseFloat(auctionBidAmount);
-    const targetAuction = auctions.find(a => a.id === aucId);
-
-    if (!numericBid || numericBid <= targetAuction.currentBid) {
-      alert(`Bid must be higher than current price (₹${targetAuction.currentBid})`);
-      return;
-    }
-
-    setAuctions(prev =>
-      prev.map(auc => {
-        if (auc.id === aucId) {
-          return {
-            ...auc,
-            currentBid: numericBid,
-            highestBidder: userRole === 'artist' ? 'Elena_Artist' : 'You (Local Buyer)',
-            totalBids: auc.totalBids + 1
-          };
+  const handleAuctionBid = (aucId, numericBid) => {
+    setAuctions(prev => prev.map(auc => {
+      const targetId = auc.id || auc._id;
+      if (targetId === aucId) {
+        if (numericBid <= auc.currentBid) {
+          alert(`Bid must be higher than current price (${formatPrice(auc.currentBid)})`);
+          return auc;
         }
-        return auc;
-      })
-    );
-
-    setBiddingAuctionId(null);
-    setAuctionBidAmount('');
-    showNotification(`Bid placed successfully for ₹${numericBid}!`);
+        showNotification(`Bid placed successfully for ${formatPrice(numericBid)}!`);
+        return { ...auc, currentBid: numericBid, bidsCount: (auc.bidsCount || 0) + 1 };
+      }
+      return auc;
+    }));
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-amber-500 selection:text-slate-950">
-      
-      {/* Dynamic Toast Notification */}
-      {notification && (
-        <div className="fixed top-20 right-6 z-50 bg-amber-500 text-slate-950 px-5 py-3 rounded-xl shadow-2xl font-medium flex items-center gap-3 animate-bounce">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased pb-20">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-5 right-5 z-50 bg-amber-400 text-slate-950 px-5 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-2 animate-bounce">
           <Sparkles className="w-5 h-5" />
-          <span>{notification}</span>
+          {toastMessage}
         </div>
       )}
 
-      {}
-      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-4">
+      {/* HEADER BAR */}
+      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 sm:px-8 py-3">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           
-          {/* Logo & Slogan */}
+          {/* Brand Logo */}
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 bg-gradient-to-tr from-amber-500 to-rose-500 rounded-xl flex items-center justify-center shadow-lg shadow-amber-500/20">
-              <Palette className="w-6 h-6 text-slate-950" />
+            <div className="bg-gradient-to-tr from-amber-500 to-amber-300 p-2 rounded-xl text-slate-950 font-black text-xl tracking-wider shadow-lg">
+              AH
             </div>
             <div>
-              <span className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-amber-200 via-rose-200 to-amber-400 bg-clip-text text-transparent">
-                ArtisanHub
-              </span>
-              <div className="flex items-center gap-1.5 text-xs text-amber-400/80 font-medium">
-                <MapPin className="w-3 h-3" />
-                <span>Downtown Arts Radius (5 km)</span>
-              </div>
+              <h1 className="text-xl font-extrabold tracking-tight text-slate-100">
+                Artisan<span className="text-amber-400">Hub</span>
+              </h1>
+              <p className="text-xs text-slate-400 flex items-center gap-1">
+                <MapPin className="w-3 h-3 text-amber-400" /> {currentUser.location}
+              </p>
             </div>
           </div>
 
-          {/* Persona Switcher Toggle Pill */}
-          <div className="bg-slate-950 p-1 rounded-2xl border border-slate-800 flex items-center gap-1">
+          {/* Persona Switcher Toggle */}
+          <div className="flex items-center gap-2 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700">
             <button
-              onClick={() => setUserRole('buyer')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
-                userRole === 'buyer'
-                  ? 'bg-amber-500 text-slate-950 shadow-md'
+              onClick={toggleRole}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                currentUser.role === 'buyer' 
+                  ? 'bg-amber-400 text-slate-950 shadow-md' 
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <ShoppingBag className="w-4 h-4" />
-              <span>Buyer View</span>
+              <User className="w-3.5 h-3.5" /> Buyer Portal
             </button>
             <button
-              onClick={() => setUserRole('artist')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
-                userRole === 'artist'
-                  ? 'bg-rose-500 text-slate-950 shadow-md'
+              onClick={toggleRole}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                currentUser.role === 'artist' 
+                  ? 'bg-amber-400 text-slate-950 shadow-md' 
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Palette className="w-4 h-4" />
-              <span>Artist View</span>
+              <Briefcase className="w-3.5 h-3.5" /> Artist Studio
             </button>
           </div>
 
-          {/* User Status / Verification Pill */}
-          <div className="hidden md:flex items-center gap-3">
+          {/* User Phone Auth Info */}
+          <div className="flex items-center gap-3">
             <button 
               onClick={() => setIsAuthModalOpen(true)}
-              className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 px-3.5 py-2 rounded-xl text-xs font-medium text-slate-300 transition"
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-700 transition"
             >
-              <ShieldCheck className={`w-4 h-4 ${isPhoneVerified ? 'text-emerald-400' : 'text-amber-400'}`} />
-              <span>{isPhoneVerified ? 'Phone Verified' : 'Verify Phone'}</span>
+              <Shield className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">{currentUser.phone}</span>
+              <span className="bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded text-[10px]">OTP Verified</span>
             </button>
-            <div className="w-9 h-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-amber-400 text-xs">
-              {userRole === 'artist' ? 'ER' : 'UB'}
-            </div>
           </div>
-        </div>
-
-        {/* Feature Navigation Tabs */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 border-t border-slate-800/50">
-          <nav className="flex space-x-6 sm:space-x-8 overflow-x-auto py-3 scrollbar-none">
-            {[
-              { id: 'marketplace', label: 'Marketplace & Search', icon: Compass },
-              { id: 'commissions', label: 'Art Commission Desk', icon: MessageSquare, badge: commissionRequests.length },
-              { id: 'auctions', label: 'Limited Edition Auctions', icon: Gavel, badge: auctions.length },
-              { id: 'profile', label: 'Security & Phone Auth', icon: Lock },
-              { id: 'future', label: 'Hub Extensions', icon: Layers, isNew: true },
-            ].map(tab => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 pb-1 text-sm font-medium whitespace-nowrap transition-colors relative ${
-                    isActive ? 'text-amber-400' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span>{tab.label}</span>
-                  {tab.badge !== undefined && (
-                    <span className="ml-1 bg-slate-800 text-amber-400 text-xs px-2 py-0.5 rounded-full border border-slate-700">
-                      {tab.badge}
-                    </span>
-                  )}
-                  {tab.isNew && (
-                    <span className="bg-gradient-to-r from-amber-500 to-rose-500 text-slate-950 font-bold text-[10px] px-1.5 py-0.5 rounded-md">
-                      Next
-                    </span>
-                  )}
-                  {isActive && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-400 rounded-full" />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
         </div>
       </header>
 
-      {}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* MAIN NAVIGATION TABS */}
+      <nav className="bg-slate-900 border-b border-slate-800 px-4 sm:px-8">
+        <div className="max-w-7xl mx-auto flex gap-2 overflow-x-auto scrollbar-none py-2">
+          <button
+            onClick={() => setActiveTab('marketplace')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'marketplace' ? 'bg-slate-800 text-amber-400 border border-amber-400/30' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Search className="w-4 h-4" /> Local Marketplace
+          </button>
 
-        {/* Persona Banner Context Bar */}
-        <div className="mb-8 p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl ${userRole === 'artist' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
-              {userRole === 'artist' ? <Palette className="w-5 h-5" /> : <ShoppingBag className="w-5 h-5" />}
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-slate-200">
-                Logged in as <span className="text-amber-400">{userRole === 'artist' ? 'Elena Rostova (Local Artist)' : 'Verified Local Buyer'}</span>
-              </p>
-              <p className="text-xs text-slate-400">
-                {userRole === 'artist' 
-                  ? 'Manage listings, bid on custom buyer requests, and list special limited editions.' 
-                  : 'Browse nearby hyper-local art, place custom commission requests, and join live bids.'}
-              </p>
-            </div>
-          </div>
+          <button
+            onClick={() => setActiveTab('demands')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'demands' ? 'bg-slate-800 text-amber-400 border border-amber-400/30' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4" /> Custom Art Demands & Bids
+          </button>
 
-          {userRole === 'artist' && (
-            <button
-              onClick={() => setIsAddArtModalOpen(true)}
-              className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-amber-500/20 transition"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>List New Artwork</span>
-            </button>
-          )}
+          <button
+            onClick={() => setActiveTab('auctions')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'auctions' ? 'bg-slate-800 text-amber-400 border border-amber-400/30' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Gavel className="w-4 h-4" /> Limited Edition Auctions
+          </button>
 
-          {userRole === 'buyer' && activeTab === 'commissions' && (
-            <button
-              onClick={() => setIsCommissionModalOpen(true)}
-              className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-amber-500/20 transition"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>Post Custom Request</span>
-            </button>
-          )}
+          <button
+            onClick={() => setActiveTab('profile')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'profile' ? 'bg-slate-800 text-amber-400 border border-amber-400/30' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <User className="w-4 h-4" /> Account Profile
+          </button>
+
+          <button
+            onClick={() => setActiveTab('future')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'future' ? 'bg-slate-800 text-amber-400 border border-amber-400/30' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-purple-400" /> Roadmap Extensions
+          </button>
         </div>
+      </nav>
 
-        {/* ========================================================================= */}
-        {/* FEATURE TAB 1: MARKETPLACE & SEARCH ENGINE                               */}
-        {/* ========================================================================= */}
+      {/* MAIN CONTAINER CONTENT */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-8 py-6">
+
+        {/* ================= TAB 1: LOCAL MARKETPLACE CATALOG ================= */}
         {activeTab === 'marketplace' && (
           <div className="space-y-6">
-            
-            {/* Hyper-Local Search & Filter Controls */}
-            <div className="bg-slate-900 border border-slate-800 p-4 sm:p-6 rounded-2xl space-y-4">
-              <div className="flex flex-col md:flex-row items-center gap-4">
-                
-                {/* Search Input */}
-                <div className="relative flex-1 w-full">
-                  <Search className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-100">Hyper-Local Art Catalog</h2>
+                <p className="text-xs text-slate-400">Discover authentic handcrafted pieces directly from local neighborhood artists</p>
+              </div>
+
+              {currentUser.role === 'artist' && (
+                <button
+                  onClick={() => setIsAddArtOpen(true)}
+                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shadow-lg"
+                >
+                  <Plus className="w-4 h-4" /> List New Artwork
+                </button>
+              )}
+            </div>
+
+            {/* Filter Search Header */}
+            <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex flex-col md:flex-row gap-4">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-3.5 text-slate-500" />
                   <input
                     type="text"
+                    placeholder="Search by title, artist, or medium..."
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search local artists, artwork titles, mediums (e.g. Oil, Clay, Modern)..."
-                    className="w-full bg-slate-950 border border-slate-800 pl-11 pr-4 py-3 rounded-xl text-sm focus:outline-none focus:border-amber-500 text-slate-200 placeholder-slate-500"
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
                   />
                 </div>
 
-                {/* Maximum Price Range Slider */}
-                <div className="w-full md:w-64 bg-slate-950 border border-slate-800 p-3 rounded-xl flex flex-col gap-1">
-                  <div className="flex justify-between text-xs text-slate-400">
-                    <span>Max Price</span>
-                    <span className="text-amber-400 font-bold">₹{maxPriceFilter}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="100"
-                    max="2000"
-                    step="50"
-                    value={maxPriceFilter}
-                    onChange={(e) => setMaxPriceFilter(Number(e.target.value))}
-                    className="accent-amber-500 cursor-pointer w-full"
-                  />
+                <div className="flex gap-2 overflow-x-auto scrollbar-none">
+                  {['All', 'Oil Painting', 'Sculpture', 'Sketch', 'Digital Art', 'Ceramics'].map(cat => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedCategory(cat)}
+                      className={`px-3 py-2 rounded-xl text-xs font-medium whitespace-nowrap border transition ${
+                        selectedCategory === cat 
+                          ? 'bg-amber-400/10 border-amber-400 text-amber-400' 
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Category Filter Pills */}
-              <div className="flex items-center gap-2 overflow-x-auto pt-2 scrollbar-none">
-                <span className="text-xs text-slate-500 font-medium flex items-center gap-1 mr-2">
-                  <Filter className="w-3.5 h-3.5" /> Mediums:
-                </span>
-                {['All', 'Oil Painting', 'Pottery', 'Digital Art', 'Sculpture'].map(cat => (
-                  <button
-                    key={cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition ${
-                      selectedCategory === cat
-                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                    }`}
-                  >
-                    {cat}
-                  </button>
-                ))}
+              {/* Price Filter Slider */}
+              <div className="flex items-center gap-4 text-xs text-slate-400 pt-2 border-t border-slate-800/60">
+                <span>Max Price Filter:</span>
+                <input 
+                  type="range" 
+                  min="1000" 
+                  max="100000" 
+                  step="1000" 
+                  value={maxPriceFilter} 
+                  onChange={e => setMaxPriceFilter(Number(e.target.value))}
+                  className="accent-amber-400 flex-1 max-w-xs cursor-pointer"
+                />
+                <span className="text-amber-400 font-bold">{formatPrice(maxPriceFilter)}</span>
               </div>
             </div>
 
-            {/* Artwork Gallery Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {filteredArtworks.map(art => (
-                <div
-                  key={art.id}
-                  className="group bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl overflow-hidden flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-amber-500/5"
-                >
-                  {/* Artwork Image Container */}
-                  <div className="relative aspect-[4/3] overflow-hidden bg-slate-950">
-                    <img
-                      src={art.image}
-                      alt={art.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    />
-                    <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-md border border-slate-800 text-amber-400 text-[11px] font-semibold px-2.5 py-1 rounded-lg flex items-center gap-1">
-                      <Tag className="w-3 h-3" />
-                      <span>{art.category}</span>
+            {/* Artwork Card Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredProducts.map(art => (
+                <div key={art.id || art._id} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-slate-700 transition group flex flex-col justify-between">
+                  <div>
+                    <div className="relative h-56 overflow-hidden bg-slate-950 cursor-pointer" onClick={() => setSelectedProductDetail(art)}>
+                      <img 
+                        src={art.imageUrl} 
+                        alt={art.title} 
+                        className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+                      />
+                      <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] font-medium border border-slate-800 flex items-center gap-1">
+                        <MapPin className="w-3 h-3 text-amber-400" /> {art.location}
+                      </div>
                     </div>
-                    <button className="absolute top-3 right-3 p-2 bg-slate-950/80 backdrop-blur-md rounded-full text-slate-400 hover:text-rose-400 transition">
-                      <Heart className="w-4 h-4" />
-                    </button>
+
+                    <div className="p-4 space-y-3">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <h3 
+                            onClick={() => setSelectedProductDetail(art)}
+                            className="font-bold text-sm text-slate-100 group-hover:text-amber-400 transition cursor-pointer"
+                          >
+                            {art.title}
+                          </h3>
+                          <p className="text-xs text-slate-400">by {art.artist}</p>
+                        </div>
+                        <span className="text-lg font-extrabold text-amber-400">{formatPrice(art.price)}</span>
+                      </div>
+
+                      <p className="text-xs text-slate-400 line-clamp-2">{art.description}</p>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px] text-slate-500">
+                        <span>{art.medium}</span>
+                        <span>{art.dimensions}</span>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Artwork Meta Content */}
-                  <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <h3 className="font-bold text-slate-100 group-hover:text-amber-400 transition line-clamp-1">
-                          {art.title}
-                        </h3>
-                      </div>
-                      <p className="text-xs text-slate-400 line-clamp-2 mb-3">
-                        {art.description}
-                      </p>
-
-                      {/* Artist Detail Card */}
-                      <div className="flex items-center gap-2.5 pt-2 border-t border-slate-800/60">
-                        <img
-                          src={art.artistAvatar}
-                          alt={art.artistName}
-                          className="w-7 h-7 rounded-full object-cover border border-slate-700"
-                        />
-                        <div className="text-xs overflow-hidden">
-                          <p className="text-slate-300 font-medium flex items-center gap-1">
-                            {art.artistName}
-                            {art.verified && <CheckCircle2 className="w-3 h-3 text-emerald-400 inline" />}
-                          </p>
-                          <p className="text-slate-500 truncate flex items-center gap-1">
-                            <MapPin className="w-2.5 h-2.5" />
-                            <span>{art.location}</span>
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Price and Action Footer */}
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-800/80">
-                      <div>
-                        <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Price</span>
-                        <span className="text-lg font-extrabold text-amber-400">₹{art.price}</span>
-                      </div>
-                      <button 
-                        onClick={() => showNotification(`Inquiry sent to ${art.artistName} for ${art.title}`)}
-                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Inquire</span>
-                      </button>
-                    </div>
+                  <div className="p-4 pt-0">
+                    <button 
+                      onClick={() => showNotification(`Contact details for ${art.artist} requested!`)}
+                      className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-2 rounded-xl text-xs font-semibold border border-slate-700 transition flex items-center justify-center gap-1.5"
+                    >
+                      <Phone className="w-3.5 h-3.5 text-amber-400" /> Connect with Artist
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
-
-            {filteredArtworks.length === 0 && (
-              <div className="text-center py-16 bg-slate-900/50 rounded-2xl border border-slate-800">
-                <AlertCircle className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                <p className="text-slate-300 font-medium">No artwork matching your search criteria.</p>
-                <p className="text-xs text-slate-500 mt-1">Try expanding your max price filter or changing search tags.</p>
-              </div>
-            )}
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* FEATURE TAB 2: CUSTOM ART COMMISSIONS & BIDDING DESK                      */}
-        {/* ========================================================================= */}
-        {activeTab === 'commissions' && (
+        {/* ================= TAB 2: CUSTOM DEMANDS & OPEN BIDS ================= */}
+        {activeTab === 'demands' && (
           <div className="space-y-6">
-            <div className="bg-slate-900/60 border border-slate-800 p-6 rounded-2xl">
-              <div className="max-w-2xl">
-                <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5 text-amber-400" />
-                  Custom Art Commission Desk
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Buyers present custom art desires and budget limits. Local artists review details and bid competitive price quotes and completion schedules.
-                </p>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-100">Buyer Art Demands & Open Bids</h2>
+                <p className="text-xs text-slate-400">Buyers state custom art requirements while local artists submit price proposals</p>
               </div>
+
+              {currentUser.role === 'buyer' && (
+                <button
+                  onClick={() => setIsCreateRequestOpen(true)}
+                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shadow-lg"
+                >
+                  <Plus className="w-4 h-4" /> Post Custom Art Need
+                </button>
+              )}
             </div>
 
-            {/* List of Custom Commission Requests */}
+            {/* Demands Listing */}
             <div className="space-y-4">
-              {commissionRequests.map(req => (
-                <div key={req.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-                  
-                  {/* Buyer Request Header */}
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-                    <div className="flex items-start gap-3">
-                      <img
-                        src={req.buyerAvatar}
-                        alt={req.buyerName}
-                        className="w-10 h-10 rounded-full object-cover border border-slate-700"
-                      />
-                      <div>
-                        <h3 className="font-bold text-slate-100 text-base">{req.title}</h3>
-                        <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
-                          <span>Posted by <strong className="text-slate-200">{req.buyerName}</strong></span>
-                          <span>•</span>
-                          <span className="flex items-center gap-1 text-slate-400">
-                            <MapPin className="w-3 h-3 text-amber-400" />
-                            {req.location}
-                          </span>
-                        </div>
+              {buyerRequests.map(req => (
+                <div key={req.id || req._id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="bg-amber-400/10 text-amber-400 border border-amber-400/30 text-[10px] font-bold px-2 py-0.5 rounded-md">
+                          {req.category}
+                        </span>
+                        <h3 className="font-bold text-base text-slate-100">{req.title}</h3>
                       </div>
+                      <p className="text-xs text-slate-400 mt-1">Requested by {req.buyerName} • <span className="text-slate-500">{req.location}</span></p>
                     </div>
 
-                    <div className="flex items-center gap-4 bg-slate-950 px-4 py-2 rounded-xl border border-slate-800 self-start md:self-auto">
-                      <div>
-                        <span className="text-[10px] text-slate-500 uppercase block">Target Budget</span>
-                        <span className="text-sm font-bold text-amber-400">₹{req.budgetMin} - ₹{req.budgetMax}</span>
-                      </div>
-                      <div className="h-6 w-px bg-slate-800" />
-                      <div>
-                        <span className="text-[10px] text-slate-500 uppercase block">Deadline</span>
-                        <span className="text-xs text-slate-300 font-medium flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-slate-400" /> {req.deadline}
-                        </span>
-                      </div>
+                    <div className="text-left md:text-right">
+                      <span className="text-xs text-slate-400 block">Preferred Budget Range</span>
+                      <span className="text-sm font-bold text-amber-400">{formatPrice(req.budgetMin)} - {formatPrice(req.budgetMax)}</span>
                     </div>
                   </div>
 
-                  {/* Request Description */}
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {req.description}
-                  </p>
+                  <p className="text-xs text-slate-300 bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">{req.description}</p>
 
-                  {/* Bids Section Header */}
-                  <div className="pt-2">
-                    <div className="flex items-center justify-between mb-3">
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <Award className="w-3.5 h-3.5 text-rose-400" />
-                        Artist Bids ({req.bids.length})
-                      </h4>
-
-                      {userRole === 'artist' && (
-                        <button
-                          onClick={() => setActiveCommissionBidding(req)}
-                          className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1 transition"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>Submit Bid Proposal</span>
-                        </button>
-                      )}
+                  <div className="flex flex-wrap justify-between items-center gap-4 pt-2 border-t border-slate-800 text-xs text-slate-400">
+                    <div className="flex items-center gap-4">
+                      <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5 text-slate-500" /> Needed by: {req.deadline}</span>
+                      <span className="flex items-center gap-1"><Briefcase className="w-3.5 h-3.5 text-slate-500" /> Bids Submitted: {req.bids?.length || 0}</span>
                     </div>
 
-                    {/* Bids List */}
-                    {req.bids.length > 0 ? (
+                    {currentUser.role === 'artist' ? (
+                      <button
+                        onClick={() => setActiveBidModalItem(req)}
+                        className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-4 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1"
+                      >
+                        <Gavel className="w-3.5 h-3.5" /> Submit Price Proposal
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-slate-500 italic">Artists are bidding on this demand...</span>
+                    )}
+                  </div>
+
+                  {/* Submitted Bids Listing */}
+                  {req.bids && req.bids.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-800/60 space-y-2">
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Submitted Artist Proposals</p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {req.bids.map(bid => (
-                          <div key={bid.id} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-2">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <img src={bid.artistAvatar} className="w-6 h-6 rounded-full" />
-                                <span className="text-xs font-semibold text-slate-200">{bid.artistName}</span>
-                              </div>
-                              <span className="text-sm font-extrabold text-amber-400">₹{bid.amount}</span>
+                        {req.bids.map((bid, i) => (
+                          <div key={i} className="bg-slate-950 border border-slate-800 p-3 rounded-xl space-y-1">
+                            <div className="flex justify-between items-center">
+                              <span className="font-semibold text-xs text-slate-200">{bid.artistName}</span>
+                              <span className="text-sm font-extrabold text-amber-400">{formatPrice(bid.amount)}</span>
                             </div>
-                            <p className="text-xs text-slate-400 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800/80">
-                              "{bid.proposal}"
-                            </p>
-                            <span className="text-[10px] text-slate-500 block">Est. Timeline: {bid.timeline}</span>
+                            <p className="text-[11px] text-slate-400">Est. Time: {bid.daysEst} Days</p>
+                            <p className="text-xs text-slate-300 italic">"{bid.proposal}"</p>
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      <div className="text-center py-6 bg-slate-950 rounded-xl border border-slate-800/60 text-xs text-slate-500">
-                        No proposals submitted yet. Artists can review and submit bids above.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* FEATURE TAB 3: LIMITED EDITION LIVE AUCTIONS                              */}
-        {/* ========================================================================= */}
-        {activeTab === 'auctions' && (
-          <div className="space-y-6">
-            <div className="bg-slate-900/60 border border-slate-800 p-6 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                  <Gavel className="w-5 h-5 text-amber-400" />
-                  Limited Edition Live Auctions
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Place dynamic competitive bids on rare, one-of-a-kind art pieces authenticated directly by local masters.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {auctions.map(auc => (
-                <div key={auc.id} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col md:flex-row">
-                  {/* Image */}
-                  <div className="md:w-1/2 relative bg-slate-950">
-                    <img src={auc.image} alt={auc.title} className="w-full h-full object-cover min-h-[220px]" />
-                    <div className="absolute top-3 left-3 bg-rose-500/90 backdrop-blur-md text-slate-950 font-bold text-[11px] px-2.5 py-1 rounded-lg flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>{formatCountdown(auc.endsInSeconds)}</span>
                     </div>
-                  </div>
-
-                  {/* Details */}
-                  <div className="p-5 md:w-1/2 flex flex-col justify-between space-y-4">
-                    <div>
-                      <h3 className="font-bold text-slate-100 text-base">{auc.title}</h3>
-                      <p className="text-xs text-slate-400 mt-1 line-clamp-2">{auc.description}</p>
-
-                      <div className="flex items-center gap-2 mt-3 text-xs text-slate-300">
-                        <img src={auc.artistAvatar} className="w-5 h-5 rounded-full" />
-                        <span>{auc.artistName}</span>
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-500">Current Highest Bid</span>
-                        <span className="text-xs text-slate-400">{auc.totalBids} bids</span>
-                      </div>
-                      <div className="flex items-baseline justify-between">
-                        <span className="text-xl font-black text-amber-400">₹{auc.currentBid}</span>
-                        <span className="text-[11px] text-slate-400">By {auc.highestBidder}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {biddingAuctionId === auc.id ? (
-                        <div className="flex items-center gap-2 w-full">
-                          <input
-                            type="number"
-                            placeholder={`> ₹${auc.currentBid}`}
-                            value={auctionBidAmount}
-                            onChange={(e) => setAuctionBidAmount(e.target.value)}
-                            className="w-full bg-slate-950 border border-amber-500/60 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                          />
-                          <button
-                            onClick={() => handlePlaceAuctionBid(auc.id)}
-                            className="bg-amber-500 text-slate-950 font-bold text-xs px-3 py-2 rounded-xl hover:bg-amber-400"
-                          >
-                            Confirm
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setBiddingAuctionId(auc.id);
-                            setAuctionBidAmount(auc.currentBid + 50);
-                          }}
-                          className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-rose-500 hover:opacity-95 text-slate-950 font-bold text-xs rounded-xl shadow-md transition"
-                        >
-                          Place Higher Bid
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* FEATURE TAB 4: SECURITY & PHONE AUTH VERIFICATION                         */}
-        {/* ========================================================================= */}
-        {activeTab === 'profile' && (
-          <div className="max-w-2xl mx-auto space-y-6">
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-6">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-center text-amber-400">
-                  <Lock className="w-7 h-7" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-slate-100">Security & Authentication Settings</h2>
-                  <p className="text-xs text-slate-400">Manage phone-verified login credentials and marketplace security status.</p>
-                </div>
-              </div>
-
-              <div className="space-y-4 pt-4 border-t border-slate-800">
-                {/* Phone Verification Box */}
-                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Phone className="w-5 h-5 text-slate-400" />
-                    <div>
-                      <span className="text-xs text-slate-500 block">Phone Number Status</span>
-                      <span className="text-sm font-semibold text-slate-200">{userPhone}</span>
-                    </div>
-                  </div>
-                  {isPhoneVerified ? (
-                    <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-semibold flex items-center gap-1">
-                      <ShieldCheck className="w-3.5 h-3.5" /> Verified
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => setIsAuthModalOpen(true)}
-                      className="px-3 py-1.5 bg-amber-500 text-slate-950 rounded-lg text-xs font-bold hover:bg-amber-400"
-                    >
-                      Verify OTP
-                    </button>
                   )}
                 </div>
+              ))}
+            </div>
+          </div>
+        )}
 
-                {/* Password Protection Placeholder */}
-                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Lock className="w-5 h-5 text-slate-400" />
+        {/* ================= TAB 3: LIMITED EDITION AUCTIONS ================= */}
+        {activeTab === 'auctions' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-100">Special Limited Edition Auctions</h2>
+              <p className="text-xs text-slate-400">Exclusive bidding portal for rare, numbered, and high-value artworks</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {auctions.map(auc => (
+                <div key={auc.id || auc._id} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden p-4 flex flex-col sm:flex-row gap-4">
+                  <img src={auc.imageUrl} alt={auc.title} className="w-full sm:w-44 h-44 object-cover rounded-xl" />
+
+                  <div className="flex-1 space-y-3">
                     <div>
-                      <span className="text-xs text-slate-500 block">Password Protection</span>
-                      <span className="text-sm font-semibold text-slate-200">••••••••••••••</span>
+                      <span className="text-[10px] font-bold bg-amber-400/10 text-amber-400 border border-amber-400/30 px-2 py-0.5 rounded-md">
+                        LIVE AUCTION
+                      </span>
+                      <h3 className="font-bold text-sm text-slate-100 mt-1">{auc.title}</h3>
+                      <p className="text-xs text-slate-400">By {auc.artist}</p>
                     </div>
+
+                    <div className="flex justify-between items-end bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                      <div>
+                        <span className="text-[10px] text-slate-500 block">Current High Bid</span>
+                        <span className="text-xl font-black text-amber-400">{formatPrice(auc.currentBid)}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-500 block">Total Bids</span>
+                        <span className="text-xs font-bold text-slate-300">{auc.bidsCount} Bids</span>
+                      </div>
+                    </div>
+
+                    {/* Quick Bid Form */}
+                    <form 
+                      onSubmit={e => {
+                        e.preventDefault();
+                        const input = e.target.elements.bidVal;
+                        handleAuctionBid(auc.id || auc._id, Number(input.value));
+                        input.value = '';
+                      }}
+                      className="flex gap-2"
+                    >
+                      <input 
+                        name="bidVal"
+                        type="number" 
+                        placeholder={`> ${formatPrice(auc.currentBid)}`}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                        required
+                      />
+                      <button 
+                        type="submit" 
+                        className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <Gavel className="w-3.5 h-3.5" /> Place Bid
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ================= TAB 4: ACCOUNT PROFILE & SECURITY ================= */}
+        {activeTab === 'profile' && (
+          <div className="space-y-6 max-w-3xl mx-auto">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 bg-gradient-to-tr from-amber-500 to-amber-300 rounded-full flex items-center justify-center text-slate-950 font-black text-2xl">
+                  {currentUser.name.charAt(0)}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-bold text-slate-100">{currentUser.name}</h2>
+                    <span className="bg-amber-400/10 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-400/30 uppercase">
+                      {currentUser.role}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 flex items-center gap-1 mt-1">
+                    <MapPin className="w-3.5 h-3.5 text-amber-400" /> {currentUser.location} • Member since {currentUser.joinedDate}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-4 border-t border-slate-800">
+                <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-emerald-400" /> Phone Verification & Security Status
+                </h3>
+                
+                <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-200">{currentUser.phone}</p>
+                    <p className="text-[10px] text-emerald-400 flex items-center gap-1 mt-0.5">
+                      <CheckCircle2 className="w-3 h-3" /> Mobile Number Authenticated with OTP
+                    </p>
                   </div>
                   <button 
-                    onClick={() => showNotification('Password update link dispatched to registered phone.')}
-                    className="text-xs text-amber-400 hover:underline font-medium"
+                    onClick={() => setIsAuthModalOpen(true)}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
                   >
-                    Change Password
+                    Manage Auth
                   </button>
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <label className="text-xs text-slate-400 block">About / Artist Bio</label>
+                <textarea 
+                  defaultValue={currentUser.bio} 
+                  rows={3}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200"
+                ></textarea>
+              </div>
+
+              <button 
+                onClick={() => showNotification("Profile changes updated!")}
+                className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-5 py-2 rounded-xl text-xs font-bold transition"
+              >
+                Save Profile Updates
+              </button>
             </div>
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* FEATURE TAB 5: FUTURE EXPANSION SLOTS                                      */}
-        {/* ========================================================================= */}
+        {/* ================= TAB 5: FUTURE ROADMAP EXTENSIONS ================= */}
         {activeTab === 'future' && (
           <div className="space-y-6">
-            <div className="bg-slate-900/60 border border-slate-800 p-6 rounded-2xl">
-              <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                <Layers className="w-5 h-5 text-rose-400" />
-                Modular Architecture: Future Feature Additions
-              </h2>
-              <p className="text-xs text-slate-400 mt-1">
-                ArtisanHub is architected for extensible scaling. Below are planned modular extensions integrated directly into the layout.
-              </p>
+            <div>
+              <h2 className="text-2xl font-bold text-slate-100">Future Roadmap & Modules</h2>
+              <p className="text-xs text-slate-400">Reserved space for upcoming hyper-local marketplace extensions</p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {[
-                {
-                  title: 'Augmented Reality (AR) Preview',
-                  icon: Eye,
-                  status: 'In Development',
-                  desc: 'Project artwork virtually onto buyer studio walls using mobile device camera previews.'
-                },
-                {
-                  title: 'Local Artisan Workshops',
-                  icon: Award,
-                  status: 'Planned Slot',
-                  desc: 'Host weekend physical craft sessions, pottery tutorials, and painting meetups locally.'
-                },
-                {
-                  title: 'Artisan Community Forum',
-                  icon: MessageSquare,
-                  status: 'Planned Slot',
-                  desc: 'Peer-to-peer artist supply exchanges, critique circles, and local exhibition discussions.'
-                }
-              ].map((feat, i) => {
-                const Icon = feat.icon;
-                return (
-                  <div key={i} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl relative overflow-hidden flex flex-col justify-between space-y-4">
-                    <div className="space-y-3">
-                      <div className="w-10 h-10 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-amber-400">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <h3 className="font-bold text-slate-200 text-base">{feat.title}</h3>
-                      <p className="text-xs text-slate-400 leading-relaxed">{feat.desc}</p>
-                    </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
+                <div className="w-10 h-10 bg-purple-500/10 text-purple-400 rounded-xl flex items-center justify-center font-bold">AR</div>
+                <h3 className="font-bold text-sm text-slate-100">AR Room Visualizer</h3>
+                <p className="text-xs text-slate-400">Buyers can preview selected art on their wall using augmented reality camera before purchasing.</p>
+                <span className="inline-block text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded">Phase 2</span>
+              </div>
 
-                    <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between">
-                      <span className="text-[10px] font-semibold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2.5 py-1 rounded-md">
-                        {feat.status}
-                      </span>
-                      <ChevronRight className="w-4 h-4 text-slate-600" />
-                    </div>
-                  </div>
-                );
-              })}
+              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
+                <div className="w-10 h-10 bg-blue-500/10 text-blue-400 rounded-xl flex items-center justify-center font-bold">WS</div>
+                <h3 className="font-bold text-sm text-slate-100">Local Art Workshops</h3>
+                <p className="text-xs text-slate-400">Local artists host weekend pottery, painting, and sculpting masterclasses for neighborhood buyers.</p>
+                <span className="inline-block text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded">Phase 3</span>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
+                <div className="w-10 h-10 bg-emerald-500/10 text-emerald-400 rounded-xl flex items-center justify-center font-bold">NFT</div>
+                <h3 className="font-bold text-sm text-slate-100">Digital Authenticity Certificate</h3>
+                <p className="text-xs text-slate-400">Verifiable blockchain certificates of physical artwork ownership and artist signature.</p>
+                <span className="inline-block text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded">Phase 4</span>
+              </div>
             </div>
           </div>
         )}
 
       </main>
 
-      {}
-      {isAuthModalOpen && (
+      {/* MODAL 1: ADD ARTWORK (ARTIST STUDIO) */}
+      {isAddArtOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-5 relative">
-            <button
-              onClick={() => setIsAuthModalOpen(false)}
-              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="text-center space-y-1">
-              <div className="w-12 h-12 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-2xl flex items-center justify-center mx-auto mb-2">
-                <Phone className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-100">Phone OTP Verification</h3>
-              <p className="text-xs text-slate-400">Verify your mobile contact to access bids and sales.</p>
-            </div>
-
-            {!otpSent ? (
-              <div className="space-y-4">
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Mobile Phone Number</label>
-                  <input
-                    type="text"
-                    value={userPhone}
-                    onChange={(e) => setUserPhone(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2.5 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-                <button
-                  onClick={() => setOtpSent(true)}
-                  className="w-full py-2.5 bg-amber-500 text-slate-950 font-bold text-sm rounded-xl hover:bg-amber-400 transition"
-                >
-                  Send Verification OTP Code
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Enter 4-Digit Security OTP</label>
-                  <input
-                    type="text"
-                    maxLength={4}
-                    placeholder="1234"
-                    value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2.5 rounded-xl text-center tracking-widest text-lg text-amber-400 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-                <button
-                  onClick={() => {
-                    setIsPhoneVerified(true);
-                    setIsAuthModalOpen(false);
-                    setOtpSent(false);
-                    setOtpCode('');
-                    showNotification('Phone number successfully verified!');
-                  }}
-                  className="w-full py-2.5 bg-emerald-500 text-slate-950 font-bold text-sm rounded-xl hover:bg-emerald-400 transition"
-                >
-                  Verify & Confirm
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {}
-      {isAddArtModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-4 relative max-h-[90vh] overflow-y-auto">
-            <button onClick={() => setIsAddArtModalOpen(false)} className="absolute top-4 right-4 text-slate-500 hover:text-slate-300">
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-              <Palette className="w-5 h-5 text-amber-400" /> List Artwork for Local Marketplace
-            </h3>
-
-            <form onSubmit={handleCreateArtwork} className="space-y-3">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md space-y-4">
+            <h3 className="text-lg font-bold text-slate-100">List New Artwork</h3>
+            <form onSubmit={handleAddArtworkSubmit} className="space-y-3">
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Artwork Title *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g., Whispering Forest Stream"
-                  value={newArtwork.title}
-                  onChange={(e) => setNewArtwork({ ...newArtwork, title: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-                />
+                <label className="text-xs text-slate-400 block mb-1">Title *</label>
+                <input required type="text" value={newArtForm.title} onChange={e => setNewArtForm({...newArtForm, title: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Category Medium</label>
-                  <select
-                    value={newArtwork.category}
-                    onChange={(e) => setNewArtwork({ ...newArtwork, category: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                  >
-                    <option value="Oil Painting">Oil Painting</option>
-                    <option value="Pottery">Pottery</option>
-                    <option value="Digital Art">Digital Art</option>
-                    <option value="Sculpture">Sculpture</option>
+                  <label className="text-xs text-slate-400 block mb-1">Category *</label>
+                  <select value={newArtForm.category} onChange={e => setNewArtForm({...newArtForm, category: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200">
+                    <option>Oil Painting</option>
+                    <option>Sculpture</option>
+                    <option>Sketch</option>
+                    <option>Digital Art</option>
+                    <option>Ceramics</option>
                   </select>
                 </div>
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Price (₹ INR) *</label>
-                  <input
-                    type="number"
-                    required
-                    placeholder="350"
-                    value={newArtwork.price}
-                    onChange={(e) => setNewArtwork({ ...newArtwork, price: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-                  />
+                  <input required type="number" placeholder="e.g. 5000" value={newArtForm.price} onChange={e => setNewArtForm({...newArtForm, price: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Medium</label>
+                  <input type="text" placeholder="e.g. Canvas & Oil" value={newArtForm.medium} onChange={e => setNewArtForm({...newArtForm, medium: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Dimensions</label>
+                  <input type="text" placeholder="e.g. 24x36 in" value={newArtForm.dimensions} onChange={e => setNewArtForm({...newArtForm, dimensions: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Dimensions / Size Spec</label>
-                <input
-                  type="text"
-                  placeholder='e.g., 20" x 30" Canvas'
-                  value={newArtwork.dimensions}
-                  onChange={(e) => setNewArtwork({ ...newArtwork, dimensions: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">Image URL (Optional Sample)</label>
-                <input
-                  type="url"
-                  placeholder="https://images.unsplash.com/..."
-                  value={newArtwork.image}
-                  onChange={(e) => setNewArtwork({ ...newArtwork, image: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                />
+                <label className="text-xs text-slate-400 block mb-1">Image URL</label>
+                <input type="url" placeholder="https://images.unsplash.com/..." value={newArtForm.imageUrl} onChange={e => setNewArtForm({...newArtForm, imageUrl: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
               </div>
 
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Description</label>
-                <textarea
-                  rows={3}
-                  placeholder="Describe your art creation process, materials used..."
-                  value={newArtwork.description}
-                  onChange={(e) => setNewArtwork({ ...newArtwork, description: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                />
+                <textarea rows="3" value={newArtForm.description} onChange={e => setNewArtForm({...newArtForm, description: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"></textarea>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-amber-500 text-slate-950 font-bold text-xs rounded-xl hover:bg-amber-400 transition mt-2"
-              >
-                Publish Artwork Listing
-              </button>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setIsAddArtOpen(false)} className="flex-1 bg-slate-800 text-slate-300 py-2 rounded-xl text-xs font-semibold">Cancel</button>
+                <button type="submit" className="flex-1 bg-amber-400 text-slate-950 py-2 rounded-xl text-xs font-bold">Post Listing</button>
+              </div>
             </form>
           </div>
         </div>
       )}
 
-      {}
-      {isCommissionModalOpen && (
+      {/* MODAL 2: CREATE CUSTOM DEMAND (BUYER) */}
+      {isCreateRequestOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-4 relative">
-            <button onClick={() => setIsCommissionModalOpen(false)} className="absolute top-4 right-4 text-slate-500 hover:text-slate-300">
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-amber-400" /> Post Custom Art Commission Request
-            </h3>
-
-            <form onSubmit={handleCreateCommissionRequest} className="space-y-3">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md space-y-4">
+            <h3 className="text-lg font-bold text-slate-100">Post Custom Art Demand</h3>
+            <form onSubmit={handleCreateRequestSubmit} className="space-y-3">
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Project Title *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g., Custom Portrait Painting for Wedding Gift"
-                  value={newRequest.title}
-                  onChange={(e) => setNewRequest({ ...newRequest, title: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-                />
+                <label className="text-xs text-slate-400 block mb-1">Title / Requirement *</label>
+                <input required type="text" placeholder="e.g. Portrait painting of family" value={newReqForm.title} onChange={e => setNewReqForm({...newReqForm, title: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Preferred Budget Range (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    placeholder="Max budget (e.g. 500)"
-                    value={newRequest.budgetMax}
-                    onChange={(e) => setNewRequest({ ...newRequest, budgetMax: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                  />
+                  <label className="text-xs text-slate-400 block mb-1">Min Budget (₹)</label>
+                  <input required type="number" placeholder="2000" value={newReqForm.budgetMin} onChange={e => setNewReqForm({...newReqForm, budgetMin: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Needed Deadline</label>
-                  <input
-                    type="date"
-                    value={newRequest.deadline}
-                    onChange={(e) => setNewRequest({ ...newRequest, deadline: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                  />
+                  <label className="text-xs text-slate-400 block mb-1">Max Budget (₹)</label>
+                  <input required type="number" placeholder="10000" value={newReqForm.budgetMax} onChange={e => setNewReqForm({...newReqForm, budgetMax: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Category</label>
+                  <select value={newReqForm.category} onChange={e => setNewReqForm({...newReqForm, category: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200">
+                    <option>Oil Painting</option>
+                    <option>Sculpture</option>
+                    <option>Sketch</option>
+                    <option>Modern Art</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Deadline Date</label>
+                  <input required type="date" value={newReqForm.deadline} onChange={e => setNewReqForm({...newReqForm, deadline: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Art Description & Specifications</label>
-                <textarea
-                  rows={3}
-                  required
-                  placeholder="Provide color choices, sizes, or references..."
-                  value={newRequest.description}
-                  onChange={(e) => setNewRequest({ ...newRequest, description: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                />
+                <label className="text-xs text-slate-400 block mb-1">Detailed Description</label>
+                <textarea rows="3" placeholder="Describe style, colors, subject matter..." value={newReqForm.description} onChange={e => setNewReqForm({...newReqForm, description: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"></textarea>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-amber-500 text-slate-950 font-bold text-xs rounded-xl hover:bg-amber-400 transition"
-              >
-                Publish Request to Artists
-              </button>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setIsCreateRequestOpen(false)} className="flex-1 bg-slate-800 text-slate-300 py-2 rounded-xl text-xs font-semibold">Cancel</button>
+                <button type="submit" className="flex-1 bg-amber-400 text-slate-950 py-2 rounded-xl text-xs font-bold">Submit Request</button>
+              </div>
             </form>
           </div>
         </div>
       )}
 
-      {}
-      {activeCommissionBidding && (
+      {/* MODAL 3: ARTIST SUBMIT BID */}
+      {activeBidModalItem && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-4 relative">
-            <button onClick={() => setActiveCommissionBidding(null)} className="absolute top-4 right-4 text-slate-500 hover:text-slate-300">
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-              <Send className="w-5 h-5 text-amber-400" /> Submit Bid for: {activeCommissionBidding.title}
-            </h3>
-
-            <form onSubmit={handleSubmitCommissionBid} className="space-y-3">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md space-y-4">
+            <h3 className="text-lg font-bold text-slate-100">Submit Proposal Quote</h3>
+            <p className="text-xs text-slate-400">Bidding for: <span className="text-amber-400 font-semibold">{activeBidModalItem.title}</span></p>
+            
+            <form onSubmit={handleBidSubmit} className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Your Price Quote (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    placeholder="750"
-                    value={newCommissionBid.amount}
-                    onChange={(e) => setNewCommissionBid({ ...newCommissionBid, amount: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                  />
+                  <input required type="number" placeholder="e.g. 7500" value={bidForm.amount} onChange={e => setBidForm({...bidForm, amount: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Completion Timeline</label>
-                  <input
-                    type="text"
-                    placeholder="e.g., 2 Weeks"
-                    value={newCommissionBid.timeline}
-                    onChange={(e) => setNewCommissionBid({ ...newCommissionBid, timeline: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                  />
+                  <label className="text-xs text-slate-400 block mb-1">Estimated Days</label>
+                  <input required type="number" placeholder="e.g. 7" value={bidForm.daysEst} onChange={e => setBidForm({...bidForm, daysEst: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200" />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Proposal & Sample Details</label>
-                <textarea
-                  rows={3}
-                  required
-                  placeholder="Explain your plan, materials, and why you are fit for this artwork..."
-                  value={newCommissionBid.proposal}
-                  onChange={(e) => setNewCommissionBid({ ...newCommissionBid, proposal: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl text-xs text-slate-200 focus:outline-none"
-                />
+                <label className="text-xs text-slate-400 block mb-1">Proposal & Materials Detail</label>
+                <textarea rows="3" placeholder="Explain how you will craft this piece..." value={bidForm.proposal} onChange={e => setBidForm({...bidForm, proposal: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"></textarea>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-rose-500 text-slate-950 font-bold text-xs rounded-xl hover:bg-rose-400 transition"
-              >
-                Send Proposal & Bid
-              </button>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setActiveBidModalItem(null)} className="flex-1 bg-slate-800 text-slate-300 py-2 rounded-xl text-xs font-semibold">Cancel</button>
+                <button type="submit" className="flex-1 bg-amber-400 text-slate-950 py-2 rounded-xl text-xs font-bold">Send Bid</button>
+              </div>
             </form>
           </div>
         </div>
       )}
 
-      {}
-      <footer className="mt-12 bg-slate-900 border-t border-slate-800 py-8 text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <Palette className="w-4 h-4 text-amber-400" />
-            <span className="font-bold text-slate-300">ArtisanHub Local Marketplace</span>
-            <span>• Hyper-Local Artist & Buyer Network</span>
-          </div>
-          <p>© 2026 ArtisanHub Inc. All phone numbers OTP encrypted.</p>
-        </div>
-      </footer>
+      {/* MODAL 4: PRODUCT DETAIL VIEW */}
+      {selectedProductDetail && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-lg space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-bold text-slate-100">{selectedProductDetail.title}</h3>
+              <button onClick={() => setSelectedProductDetail(null)} className="text-slate-500 hover:text-slate-300">✕</button>
+            </div>
 
+            <img src={selectedProductDetail.imageUrl} alt={selectedProductDetail.title} className="w-full h-64 object-cover rounded-xl" />
+
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-400">Artist: <span className="text-slate-200 font-semibold">{selectedProductDetail.artist}</span></span>
+              <span className="text-xl font-extrabold text-amber-400">{formatPrice(selectedProductDetail.price)}</span>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">{selectedProductDetail.description}</p>
+
+            <div className="flex gap-2 pt-2">
+              <button 
+                onClick={() => {
+                  setSelectedProductDetail(null);
+                  showNotification(`Connection request sent to ${selectedProductDetail.artist}!`);
+                }} 
+                className="w-full bg-amber-400 hover:bg-amber-300 text-slate-950 py-2 rounded-xl text-xs font-bold"
+              >
+                Contact Artist via Phone OTP
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: PHONE OTP AUTH VERIFICATION */}
+      {isAuthModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                <Shield className="w-4 h-4 text-emerald-400" /> Account Security & Auth
+              </h3>
+              <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-500 text-xs">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Mobile Phone Number</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="tel" 
+                    value={loginPhone || currentUser.phone} 
+                    onChange={e => setLoginPhone(e.target.value)}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+                  />
+                  <button 
+                    onClick={() => { setOtpSent(true); showNotification("Verification OTP sent to phone!"); }}
+                    className="bg-slate-800 hover:bg-slate-700 text-amber-400 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-700"
+                  >
+                    Send OTP
+                  </button>
+                </div>
+              </div>
+
+              {otpSent && (
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Enter 4-Digit OTP Code</label>
+                  <input 
+                    type="text" 
+                    placeholder="1 2 3 4" 
+                    maxLength={4}
+                    value={otpCode}
+                    onChange={e => setOtpCode(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 tracking-widest text-center font-mono"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Account Password</label>
+                <input 
+                  type="password" 
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={e => setLoginPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+                />
+              </div>
+
+              <button 
+                onClick={() => {
+                  setIsAuthModalOpen(false);
+                  showNotification("Phone Number Verified & Security Updated!");
+                }}
+                className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 py-2 rounded-xl text-xs font-bold transition"
+              >
+                Verify & Save Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
