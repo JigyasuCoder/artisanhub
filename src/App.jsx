@@ -2,11 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { 
   Shield, MapPin, Plus, Phone, User, Gavel, 
   CheckCircle2, Sparkles, Clock, Briefcase,
-  Eye, Check, Calendar, LogOut, Database, RefreshCw
+  Eye, Check, Calendar, LogOut, Database, RefreshCw,
+  ShoppingCart, Trash2, Minus, Zap
 } from 'lucide-react';
 import SearchFilterBar from './components/SearchFilterBar';
 import AuthPage from './components/AuthPage';
 import ArtGalleryGrid from './components/ArtGalleryGrid';
+import CheckoutPage from './components/CheckoutPage';
+import PaymentSuccessPage from './components/PaymentSuccessPage';
 
 // Full-Stack API Endpoint (routes through unified Express server)
 const API_BASE_URL = "/api";
@@ -272,6 +275,28 @@ export default function App() {
   const [isCreateRequestOpen, setIsCreateRequestOpen] = useState(false);
   const [activeBidModalItem, setActiveBidModalItem] = useState(null);
   const [quickViewProduct, setQuickViewProduct] = useState(null);
+
+  // Cart, Checkout & Payment Gateway States
+  const [cartItems, setCartItems] = useState(() => {
+    try {
+      const saved = localStorage.getItem('artisanhub_cart_items');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [checkoutItems, setCheckoutItems] = useState([]);
+  const [checkoutFromCart, setCheckoutFromCart] = useState(false);
+  const [latestReceipt, setLatestReceipt] = useState(null);
+  const [orders, setOrders] = useState(() => {
+    try {
+      const saved = localStorage.getItem('artisanhub_orders');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // Form Input States
   const [newArtForm, setNewArtForm] = useState({
@@ -730,6 +755,112 @@ export default function App() {
     }
   };
 
+  // ==================== CART & DUMMY PAYMENT GATEWAY HANDLERS ====================
+
+  const persistCart = (nextCart) => {
+    try {
+      localStorage.setItem('artisanhub_cart_items', JSON.stringify(nextCart));
+    } catch (e) {
+      console.warn('Failed to persist cart:', e);
+    }
+  };
+
+  const handleAddToCart = (art) => {
+    const artId = art.id || art._id;
+    setCartItems((prev) => {
+      const existing = prev.find((item) => (item.id || item._id) === artId);
+      const next = existing
+        ? prev.map((item) =>
+            (item.id || item._id) === artId
+              ? { ...item, quantity: (item.quantity || 1) + 1 }
+              : item
+          )
+        : [{ ...art, quantity: 1 }, ...prev];
+      persistCart(next);
+      return next;
+    });
+    showNotification(`Added "${art.title}" to your cart!`);
+  };
+
+  const handleUpdateCartQty = (artId, nextQty) => {
+    const safeQty = Math.max(1, nextQty);
+    setCartItems((prev) => {
+      const next = prev.map((item) =>
+        (item.id || item._id) === artId ? { ...item, quantity: safeQty } : item
+      );
+      persistCart(next);
+      return next;
+    });
+    setCheckoutItems((prev) =>
+      prev.map((item) =>
+        (item.id || item._id) === artId ? { ...item, quantity: safeQty } : item
+      )
+    );
+  };
+
+  const handleRemoveFromCart = (artId) => {
+    setCartItems((prev) => {
+      const next = prev.filter((item) => (item.id || item._id) !== artId);
+      persistCart(next);
+      return next;
+    });
+    setCheckoutItems((prev) => prev.filter((item) => (item.id || item._id) !== artId));
+  };
+
+  const handleBuyNow = (art) => {
+    setCheckoutItems([{ ...art, quantity: 1 }]);
+    setCheckoutFromCart(false);
+    setQuickViewProduct(null);
+    setIsCartOpen(false);
+    setIsAuthViewOpen(false);
+    setActiveTab('checkout');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleProceedToCartCheckout = () => {
+    if (cartItems.length === 0) return;
+    setCheckoutItems([...cartItems]);
+    setCheckoutFromCart(true);
+    setIsCartOpen(false);
+    setIsAuthViewOpen(false);
+    setActiveTab('checkout');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handlePaymentSuccess = (receipt) => {
+    setLatestReceipt(receipt);
+    setOrders((prev) => {
+      const next = [receipt, ...prev];
+      try {
+        localStorage.setItem('artisanhub_orders', JSON.stringify(next));
+      } catch (e) {
+        console.warn('Failed to persist orders:', e);
+      }
+      return next;
+    });
+
+    if (receipt.isCartCheckout) {
+      setCartItems([]);
+      persistCart([]);
+    }
+
+    if (receipt.paymentMethod === 'upi') {
+      setActiveTab('payment-success');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      showNotification(`UPI payment of ${formatPrice(receipt.totalAmount)} verified!`);
+    } else {
+      setActiveTab('payment-success');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      showNotification(`Order ${receipt.orderId} confirmed!`);
+    }
+  };
+
+  const totalCartCount = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
+  const cartSubtotal = cartItems.reduce(
+    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+    0
+  );
+
   // Gate Dashboard behind authentication - Login page displayed first
   if (!isAuthenticated) {
     return (
@@ -879,8 +1010,23 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Zone 3: Persona Toggle, User Info & Sign Out */}
+          {/* Zone 3: Cart, Persona Toggle, User Info & Sign Out */}
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsCartOpen(true)}
+              className="relative flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-800 hover:border-amber-400/40 text-slate-200 transition"
+              title="View Shopping Cart"
+            >
+              <ShoppingCart className="w-4 h-4 text-amber-400" />
+              <span className="hidden sm:inline">Cart</span>
+              {totalCartCount > 0 && (
+                <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded-full leading-none tabular-nums">
+                  {totalCartCount}
+                </span>
+              )}
+            </button>
+
             <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={toggleRole}
@@ -984,7 +1130,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* HERO BANNER SECTION (High-Converting with Dual CTAs) */}
+      {/* HERO BANNER SECTION (Hidden on dedicated Checkout & Payment Success pages) */}
+      {!isAuthViewOpen && activeTab !== 'checkout' && activeTab !== 'payment-success' && (
       <section className="relative overflow-hidden border-b border-slate-800/80 bg-gradient-to-b from-slate-900/60 via-slate-950 to-slate-950">
         {/* Subtle decorative background ambient glow */}
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -1097,6 +1244,7 @@ export default function App() {
           </div>
         </div>
       </section>
+      )}
 
       {/* MAIN CONTAINER CONTENT */}
       <main className="max-w-7xl mx-auto px-4 sm:px-8 py-8">
@@ -1158,9 +1306,12 @@ export default function App() {
             <ArtGalleryGrid
               artworks={filteredProducts}
               likedArtworks={likedArtworks}
+              cartItems={cartItems}
               onToggleLike={handleToggleLike}
               onQuickView={(art) => setQuickViewProduct(art)}
               onInquire={(art) => showNotification(`Contact request initiated for artist ${art.artist}!`)}
+              onAddToCart={handleAddToCart}
+              onBuyNow={handleBuyNow}
               onResetFilters={handleResetFilters}
             />
           </div>
@@ -1508,6 +1659,59 @@ export default function App() {
                 Save Profile Changes
               </button>
             </div>
+
+            {/* Collector Order History */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                  <ShoppingCart className="w-4 h-4 text-amber-400" /> Acquired Artworks & Orders
+                </h3>
+                <span className="text-xs text-slate-400 font-semibold">{orders.length} Order(s)</span>
+              </div>
+
+              {orders.length === 0 ? (
+                <p className="text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center">
+                  No purchases yet. Explore the Art Gallery and use Buy Now or Cart to acquire original works.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {orders.map((ord) => (
+                    <div
+                      key={ord.orderId}
+                      className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs font-bold text-slate-100">{ord.orderId}</span>
+                          <span className="text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                            {ord.paymentMethodLabel}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {ord.items.map((i) => `${i.title} (×${i.quantity})`).join(', ')}
+                        </p>
+                        <p className="text-[11px] text-slate-500">{ord.paidAt} · UTR: {ord.utrNumber}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-base font-black text-amber-400 tabular-nums">
+                          {formatPrice(ord.totalAmount)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLatestReceipt(ord);
+                            setActiveTab('payment-success');
+                          }}
+                          className="text-[11px] text-amber-400 hover:underline font-semibold"
+                        >
+                          View Receipt
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1554,6 +1758,28 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* ================= PAGE: ORDER SUMMARY & PAYMENT METHOD ================= */}
+        {activeTab === 'checkout' && (
+          <CheckoutPage
+            items={checkoutItems}
+            currentUser={currentUser}
+            isCartCheckout={checkoutFromCart}
+            onUpdateQty={handleUpdateCartQty}
+            onRemoveItem={handleRemoveFromCart}
+            onBack={() => setActiveTab('marketplace')}
+            onPaymentSuccess={handlePaymentSuccess}
+          />
+        )}
+
+        {/* ================= PAGE: PAYMENT SUCCESSFUL ================= */}
+        {activeTab === 'payment-success' && (
+          <PaymentSuccessPage
+            receipt={latestReceipt}
+            onBackToGallery={() => setActiveTab('marketplace')}
+            onViewProfile={() => setActiveTab('profile')}
+          />
         )}
           </>
         )}
@@ -1612,24 +1838,141 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={() => setQuickViewProduct(null)} 
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-bold transition border border-slate-700"
-                >
-                  Close
-                </button>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
                 <button 
                   onClick={() => {
+                    const target = quickViewProduct;
                     setQuickViewProduct(null);
-                    showNotification(`Inquiry dispatched to artist ${quickViewProduct.artist}! Phone connection opened.`);
+                    showNotification(`Inquiry dispatched to artist ${target.artist}! Phone connection opened.`);
                   }}
-                  className="flex-1 bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-lg shadow-amber-400/20"
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl text-xs font-bold transition border border-slate-700 flex items-center justify-center gap-1.5"
                 >
-                  <Phone className="w-3.5 h-3.5" /> Connect with Artist
+                  <Phone className="w-3.5 h-3.5 text-amber-400" /> Inquiry
+                </button>
+                <button 
+                  onClick={() => handleAddToCart(quickViewProduct)}
+                  className="bg-slate-950 hover:bg-slate-800 text-slate-200 py-2.5 rounded-xl text-xs font-bold transition border border-slate-700 flex items-center justify-center gap-1.5"
+                >
+                  <ShoppingCart className="w-3.5 h-3.5 text-amber-400" /> Add to Cart
+                </button>
+                <button 
+                  onClick={() => handleBuyNow(quickViewProduct)}
+                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-extrabold transition flex items-center justify-center gap-1.5 shadow-lg shadow-amber-400/20"
+                >
+                  <Zap className="w-3.5 h-3.5" /> Buy Now
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: SHOPPING CART ================= */}
+      {isCartOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-lg space-y-5 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3.5">
+              <div>
+                <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                  <ShoppingCart className="w-5 h-5 text-amber-400" /> Your Art Cart ({totalCartCount})
+                </h3>
+                <p className="text-xs text-slate-400">Review selected artworks before proceeding to checkout</p>
+              </div>
+              <button onClick={() => setIsCartOpen(false)} className="text-slate-400 hover:text-white text-sm">✕</button>
+            </div>
+
+            {cartItems.length === 0 ? (
+              <div className="py-10 text-center space-y-3">
+                <p className="text-xs sm:text-sm text-slate-400">Your cart is currently empty.</p>
+                <button
+                  type="button"
+                  onClick={() => setIsCartOpen(false)}
+                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-5 py-2.5 rounded-xl text-xs font-extrabold transition"
+                >
+                  Explore Artworks
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  {cartItems.map((item) => {
+                    const itemId = item.id || item._id;
+                    const qty = item.quantity || 1;
+                    return (
+                      <div
+                        key={itemId}
+                        className="flex items-center gap-3.5 bg-slate-950 border border-slate-800 p-3 rounded-2xl"
+                      >
+                        <img
+                          src={item.imageUrl}
+                          alt={item.title}
+                          className="w-16 h-16 object-cover rounded-xl bg-slate-900 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs sm:text-sm font-bold text-slate-100 truncate">{item.title}</h4>
+                          <p className="text-[11px] text-slate-400 truncate">By {item.artist}</p>
+                          <p className="text-xs font-black text-amber-400 tabular-nums mt-0.5">
+                            {formatPrice(item.price * qty)}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateCartQty(itemId, Math.max(1, qty - 1))}
+                              className="p-1 text-slate-400 hover:text-white"
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
+                            <span className="px-2 text-xs font-bold text-slate-200 tabular-nums">{qty}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateCartQty(itemId, qty + 1)}
+                              className="p-1 text-slate-400 hover:text-white"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveFromCart(itemId)}
+                            className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition"
+                            title="Remove"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+                  <span className="text-xs text-slate-400 font-semibold">Cart Subtotal</span>
+                  <span className="text-xl font-black text-amber-400 tabular-nums">
+                    {formatPrice(cartSubtotal)}
+                  </span>
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsCartOpen(false)}
+                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-bold border border-slate-700"
+                  >
+                    Continue Browsing
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleProceedToCartCheckout}
+                    className="flex-1 bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-extrabold shadow-lg shadow-amber-400/20 flex items-center justify-center gap-1.5"
+                  >
+                    <Zap className="w-3.5 h-3.5" /> Proceed to Checkout
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

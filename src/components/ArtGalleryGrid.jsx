@@ -1,15 +1,23 @@
 import React from 'react';
-import { MapPin, Heart, Eye, Phone, Sparkles, Filter } from 'lucide-react';
+import { MapPin, Heart, Eye, Phone, Sparkles, Filter, ShoppingCart, Zap, Check } from 'lucide-react';
 
 export default function ArtGalleryGrid({
   artworks = [],
   likedArtworks = {},
+  cartItems = [],
   onToggleLike,
   onQuickView,
   onInquire,
+  onAddToCart,
+  onBuyNow,
   onResetFilters
 }) {
   const formatPrice = (price) => `₹${Number(price).toLocaleString('en-IN')}`;
+
+  const getCartQty = (artId) => {
+    const found = cartItems.find((item) => (item.id || item._id) === artId);
+    return found ? found.quantity || 1 : 0;
+  };
 
   if (artworks.length === 0) {
     return (
@@ -38,10 +46,12 @@ export default function ArtGalleryGrid({
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-7">
       {artworks.map((art) => {
-        const isLiked = !!likedArtworks[art.id];
+        const artId = art.id || art._id;
+        const isLiked = !!likedArtworks[artId];
+        const cartQty = getCartQty(artId);
         return (
           <div
-            key={art.id || art._id}
+            key={artId}
             className="group relative backdrop-blur-xl bg-slate-900/65 border border-white/10 hover:border-amber-400/40 rounded-3xl overflow-hidden transition-all duration-300 hover:-translate-y-1.5 hover:shadow-2xl hover:shadow-amber-500/10 flex flex-col justify-between"
           >
             {/* Ambient glass gradient glow behind the card on hover */}
@@ -49,7 +59,7 @@ export default function ArtGalleryGrid({
 
             <div>
               {/* IMAGE FRAME WITH HOVER ZOOM & GLASS BADGES */}
-              <div 
+              <div
                 className="relative h-64 sm:h-72 overflow-hidden bg-slate-950 cursor-pointer"
                 onClick={() => onQuickView && onQuickView(art)}
               >
@@ -73,7 +83,7 @@ export default function ArtGalleryGrid({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (onToggleLike) onToggleLike(art.id);
+                    if (onToggleLike) onToggleLike(artId);
                   }}
                   className={`absolute top-3.5 right-3.5 backdrop-blur-md p-2.5 rounded-xl border transition-all duration-200 shadow-lg ${
                     isLiked
@@ -140,22 +150,53 @@ export default function ArtGalleryGrid({
               </div>
             </div>
 
-            {/* CARD ACTION BUTTONS */}
-            <div className="p-5 pt-0 grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => onQuickView && onQuickView(art)}
-                className="w-full backdrop-blur-md bg-slate-800/70 hover:bg-slate-700/80 text-slate-200 py-2.5 rounded-xl text-xs font-semibold border border-white/10 hover:border-slate-600 transition flex items-center justify-center gap-1.5"
-              >
-                <Eye className="w-3.5 h-3.5 text-slate-400" /> Details
-              </button>
-              <button
-                type="button"
-                onClick={() => onInquire && onInquire(art)}
-                className="w-full backdrop-blur-md bg-amber-400/15 hover:bg-amber-400 text-amber-400 hover:text-slate-950 py-2.5 rounded-xl text-xs font-extrabold border border-amber-400/30 transition flex items-center justify-center gap-1.5 shadow-sm"
-              >
-                <Phone className="w-3.5 h-3.5" /> Inquire
-              </button>
+            {/* CARD ACTION BUTTONS: Inquiry, Details, Add to Cart, Buy Now */}
+            <div className="p-5 pt-0 space-y-2.5">
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onInquire && onInquire(art)}
+                  className="w-full backdrop-blur-md bg-slate-800/70 hover:bg-slate-700/80 text-slate-200 py-2.5 rounded-xl text-xs font-semibold border border-white/10 hover:border-slate-600 transition flex items-center justify-center gap-1.5"
+                >
+                  <Phone className="w-3.5 h-3.5 text-amber-400" /> Inquiry
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onQuickView && onQuickView(art)}
+                  className="w-full backdrop-blur-md bg-slate-800/70 hover:bg-slate-700/80 text-slate-200 py-2.5 rounded-xl text-xs font-semibold border border-white/10 hover:border-slate-600 transition flex items-center justify-center gap-1.5"
+                >
+                  <Eye className="w-3.5 h-3.5 text-slate-400" /> Details
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onAddToCart && onAddToCart(art)}
+                  className={`w-full backdrop-blur-md py-2.5 rounded-xl text-xs font-bold border transition flex items-center justify-center gap-1.5 ${
+                    cartQty > 0
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25'
+                      : 'bg-slate-950/90 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-amber-400/40'
+                  }`}
+                >
+                  {cartQty > 0 ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" /> In Cart ({cartQty})
+                    </>
+                  ) : (
+                    <>
+                      <ShoppingCart className="w-3.5 h-3.5 text-amber-400" /> Add to Cart
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onBuyNow && onBuyNow(art)}
+                  className="w-full bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-extrabold transition flex items-center justify-center gap-1.5 shadow-lg shadow-amber-400/20"
+                >
+                  <Zap className="w-3.5 h-3.5" /> Buy Now
+                </button>
+              </div>
             </div>
           </div>
         );

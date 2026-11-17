@@ -1,5 +1,4 @@
 import express from 'express';
-import mongoose from 'mongoose';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import app, { ensureMongoReady } from './lib/app.js';
@@ -8,13 +7,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 
-// Keep persistent Atlas connection alive in long-lived server mode
+// Connect to MongoDB if configured; otherwise in-memory fallback activates immediately
 ensureMongoReady().catch(() => {});
-setInterval(() => {
-  if (mongoose.connection.readyState === 0) {
-    ensureMongoReady().catch(() => {});
-  }
-}, 5000);
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
