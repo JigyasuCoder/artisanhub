@@ -13,7 +13,8 @@ app.use(cors());
 // Connect to MongoDB Atlas
 const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://aprameyapnk1_db_user:vMnImo2531T7fJbX@cluster0.foxp3dd.mongodb.net/artisanhub?retryWrites=true&w=majority';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_artisanhub_key_123!';
-const DB_NAME = process.env.MONGO_DB_NAME || 'artisanhub';
+const rawDbName = (process.env.MONGO_DB_NAME || '').trim();
+const DB_NAME = (!rawDbName || rawDbName.includes('://') || /[/\\.\s"$*<>:|?@]/.test(rawDbName)) ? 'artisanhub' : rawDbName;
 
 mongoose.connect(MONGO_URI, { dbName: DB_NAME })
   .then(() => console.log('✅ Connected to MongoDB Atlas:', mongoose.connection.name))

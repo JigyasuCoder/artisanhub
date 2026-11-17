@@ -13,10 +13,32 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
   const [dbInfo, setDbInfo] = useState({ connected: false, database: 'artisanhub', checked: false });
 
   useEffect(() => {
-    fetch(`${apiBaseUrl}/db-status`)
-      .then(res => res.json())
-      .then(data => setDbInfo({ connected: !!data.connected, database: data.database || 'artisanhub', checked: true }))
-      .catch(() => setDbInfo({ connected: false, database: 'offline', checked: true }));
+    let isMounted = true;
+    let timerId;
+
+    const checkStatus = () => {
+      fetch(`${apiBaseUrl}/db-status`)
+        .then(res => res.json())
+        .then(data => {
+          if (!isMounted) return;
+          const isConnected = !!data.connected;
+          setDbInfo({ connected: isConnected, database: data.database || 'artisanhub', checked: true });
+          if (!isConnected) {
+            timerId = setTimeout(checkStatus, 3000);
+          }
+        })
+        .catch(() => {
+          if (!isMounted) return;
+          setDbInfo({ connected: false, database: 'offline', checked: true });
+          timerId = setTimeout(checkStatus, 3000);
+        });
+    };
+
+    checkStatus();
+    return () => {
+      isMounted = false;
+      if (timerId) clearTimeout(timerId);
+    };
   }, [apiBaseUrl]);
 
   // Form fields
@@ -169,7 +191,13 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           body: JSON.stringify(payload)
         });
 
-        const data = await res.json().catch(() => ({}));
+        const rawText = await res.text();
+        let data = {};
+        try {
+          data = rawText ? JSON.parse(rawText) : {};
+        } catch {
+          data = {};
+        }
 
         if (res.ok && data.user) {
           saveLocalAccount({ ...payload, id: data.user.id });
@@ -180,7 +208,11 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           }, 600);
           return;
         } else {
-          setErrorMessage(data.message || 'Registration failed. Could not save user to MongoDB database.');
+          setErrorMessage(
+            data.message ||
+            data.error ||
+            `Registration failed (HTTP ${res.status}). Could not save user to MongoDB database.`
+          );
           setIsLoading(false);
           return;
         }
@@ -205,7 +237,13 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           })
         });
 
-        const data = await res.json().catch(() => ({}));
+        const rawText = await res.text();
+        let data = {};
+        try {
+          data = rawText ? JSON.parse(rawText) : {};
+        } catch {
+          data = {};
+        }
 
         if (res.ok && data.user) {
           setIsLoading(false);
@@ -215,7 +253,11 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           }, 400);
           return;
         } else {
-          setErrorMessage(data.message || 'Invalid credentials. Password or user details incorrect.');
+          setErrorMessage(
+            data.message ||
+            data.error ||
+            `Sign in failed (HTTP ${res.status}). Password or user details incorrect.`
+          );
           setIsLoading(false);
           return;
         }
@@ -655,9 +697,13 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-950/70 border border-slate-800 text-[11px]">
               <Database className="w-3.5 h-3.5 text-slate-400" />
               <span className="text-slate-400">Database:</span>
-              <span className={`inline-block w-2 h-2 rounded-full ${dbInfo.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span className={dbInfo.connected ? 'text-emerald-300 font-semibold' : 'text-amber-300 font-medium'}>
-                {dbInfo.connected ? `MongoDB Atlas Connected (${dbInfo.database})` : 'Connecting to Atlas...'}
+              <span className={`inline-block w-2 h-2 rounded-full ${dbInfo.connected ? 'bg-emerald-400 animate-pulse' : dbInfo.checked ? 'bg-rose-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span className={dbInfo.connected ? 'text-emerald-300 font-semibold' : dbInfo.checked ? 'text-rose-300 font-medium' : 'text-amber-300 font-medium'}>
+                {dbInfo.connected
+                  ? `MongoDB Atlas Connected (${dbInfo.database})`
+                  : dbInfo.checked
+                    ? 'Atlas Reconnecting...'
+                    : 'Connecting to Atlas...'}
               </span>
             </div>
           </div>

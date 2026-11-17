@@ -155,69 +155,119 @@ const SEED_AUCTIONS = [
   }
 ];
 
-// Helper to check live MongoDB Atlas connection readyState (1 = connected)
-const isMongoReady = () => mongoose.connection.readyState === 1;
-
 // Normalization helpers for reliable cross-device lookup
 const cleanDigits = (val: string) => (val || '').replace(/\D/g, '');
 const normalizeEmail = (val: string) => (val || '').trim().toLowerCase();
 
-// Connect to MongoDB Atlas
-console.log('🔄 Initiating connection to MongoDB Atlas...');
-const DB_NAME = process.env.MONGO_DB_NAME || 'artisanhub';
-mongoose.connect(MONGO_URI, { dbName: DB_NAME, serverSelectionTimeoutMS: 10000 })
-  .then(async () => {
-    console.log(`✅ Connected to MongoDB Atlas (Database: ${mongoose.connection.name})`);
+function resolveDatabaseName(): string {
+  const raw = (process.env.MONGO_DB_NAME || '').trim();
+  // Reject invalid MongoDB database names (e.g. if a full mongodb+srv:// URI was entered into MONGO_DB_NAME)
+  if (!raw || raw.includes('://') || /[/\\.\s"$*<>:|?@]/.test(raw)) {
+    return 'artisanhub';
+  }
+  return raw;
+}
 
-    // Auto-seed collection if empty
-    try {
-      const artCount = await Artwork.countDocuments();
-      if (artCount === 0) {
-        await Artwork.insertMany(SEED_ARTWORKS);
-        console.log('🎨 Seeded 6 initial artworks to MongoDB Atlas');
-      }
-      const reqCount = await CustomRequest.countDocuments();
-      if (reqCount === 0) {
-        await CustomRequest.insertMany(SEED_REQUESTS);
-        console.log('📋 Seeded initial custom demands to MongoDB Atlas');
-      }
-      const aucCount = await Auction.countDocuments();
-      if (aucCount === 0) {
-        await Auction.insertMany(SEED_AUCTIONS);
-        console.log('🔨 Seeded initial auctions to MongoDB Atlas');
-      }
-    } catch (e) {
-      console.warn('Seed check error:', e);
+const DB_NAME = resolveDatabaseName();
+let connectPromise: Promise<typeof mongoose> | null = null;
+let hasSeeded = false;
+
+async function seedIfEmpty() {
+  if (hasSeeded || mongoose.connection.readyState !== 1) return;
+  try {
+    const artCount = await Artwork.countDocuments();
+    if (artCount === 0) {
+      await Artwork.insertMany(SEED_ARTWORKS);
+      console.log('🎨 Seeded 6 initial artworks to MongoDB Atlas');
     }
-  })
-  .catch(err => {
-    console.error('❌ MongoDB Atlas connection error:', err.message);
-  });
+    const reqCount = await CustomRequest.countDocuments();
+    if (reqCount === 0) {
+      await CustomRequest.insertMany(SEED_REQUESTS);
+      console.log('📋 Seeded initial custom demands to MongoDB Atlas');
+    }
+    const aucCount = await Auction.countDocuments();
+    if (aucCount === 0) {
+      await Auction.insertMany(SEED_AUCTIONS);
+      console.log('🔨 Seeded initial auctions to MongoDB Atlas');
+    }
+    hasSeeded = true;
+  } catch (e) {
+    console.warn('Seed check error:', e);
+  }
+}
+
+async function ensureMongoReady(): Promise<boolean> {
+  if (mongoose.connection.readyState === 1) {
+    return true;
+  }
+
+  if (!connectPromise) {
+    console.log('🔄 Connecting to MongoDB Atlas...');
+    connectPromise = mongoose
+      .connect(MONGO_URI, {
+        dbName: DB_NAME,
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 10000
+      })
+      .then(async (conn) => {
+        console.log(`✅ Connected to MongoDB Atlas (Database: ${mongoose.connection.name})`);
+        await seedIfEmpty();
+        return conn;
+      })
+      .catch((err) => {
+        console.error('❌ MongoDB Atlas connection error:', err.message);
+        connectPromise = null;
+        throw err;
+      });
+  }
+
+  try {
+    await connectPromise;
+    return mongoose.connection.readyState === 1;
+  } catch {
+    return false;
+  }
+}
 
 mongoose.connection.on('connected', () => console.log('📡 MongoDB connection is LIVE'));
-mongoose.connection.on('error', (e) => console.error('⚠️ MongoDB connection warning:', e.message));
-mongoose.connection.on('disconnected', () => console.warn('🔌 MongoDB connection disconnected'));
+mongoose.connection.on('error', (e) => {
+  console.error('⚠️ MongoDB connection warning:', e.message);
+});
+mongoose.connection.on('disconnected', () => {
+  console.warn('🔌 MongoDB connection disconnected');
+  connectPromise = null;
+});
+
+// Initiate connection immediately and keep retrying in background if disconnected
+ensureMongoReady().catch(() => {});
+setInterval(() => {
+  if (mongoose.connection.readyState === 0) {
+    ensureMongoReady().catch(() => {});
+  }
+}, 5000);
 
 // Database health check route
 app.get('/api/db-status', async (_req: Request, res: Response) => {
-  const ready = isMongoReady();
+  const ready = await ensureMongoReady();
   let userCount = 0;
   let artCount = 0;
   let requestCount = 0;
 
   if (ready) {
     try {
-      userCount = await User.countDocuments();
-      artCount = await Artwork.countDocuments();
-      requestCount = await CustomRequest.countDocuments();
+      [userCount, artCount, requestCount] = await Promise.all([
+        User.countDocuments(),
+        Artwork.countDocuments(),
+        CustomRequest.countDocuments()
+      ]);
     } catch {
-      // ignore
+      // ignore transient count error
     }
   }
 
   res.json({
     connected: ready,
-    database: mongoose.connection.name || 'artisanhub',
+    database: (mongoose.connection.name && !mongoose.connection.name.includes('://')) ? mongoose.connection.name : DB_NAME,
     host: mongoose.connection.host || 'MongoDB Atlas',
     userCount,
     artCount,
@@ -225,7 +275,6 @@ app.get('/api/db-status', async (_req: Request, res: Response) => {
     serverTime: new Date().toISOString()
   });
 });
-
 
 // ==================== AUTH ROUTES ====================
 
@@ -241,98 +290,69 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'Phone or Email is required' });
     }
 
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({
+        message: 'Could not connect to MongoDB Atlas database right now. Please try again in a few seconds.'
+      });
+    }
+
     const normEmail = email ? normalizeEmail(email) : null;
     const cleanPh = phone ? phone.trim() : null;
+    const targetRole = role || 'buyer';
 
-    // Check existing in MongoDB Atlas or memory
-    if (isMongoReady()) {
-      let existingQuery: any = { role };
-      if (cleanPh) {
-        const digits = cleanDigits(cleanPh);
-        const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+    const existingQuery: any = { role: targetRole };
+    if (cleanPh) {
+      const digits = cleanDigits(cleanPh);
+      const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+      if (last10.length > 0) {
         const flexibleRegex = last10.split('').join('[\\s-]*');
         existingQuery.$or = [
           { phone: cleanPh },
           { phone: { $regex: flexibleRegex + '$', $options: 'i' } }
         ];
-      } else if (normEmail) {
-        existingQuery.email = normEmail;
+      } else {
+        existingQuery.phone = cleanPh;
       }
+    } else if (normEmail) {
+      existingQuery.email = normEmail;
+    }
 
-      const existingUser = await User.findOne(existingQuery);
-      if (existingUser) {
-        return res.status(400).json({ 
-          message: `An account with this ${cleanPh ? 'phone number' : 'email'} is already registered as a ${role}. Please Sign In instead.` 
-        });
-      }
-
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const user = await User.create({
-        phone: cleanPh,
-        email: normEmail,
-        password: hashedPassword,
-        role: role || 'buyer',
-        name: name || (role === 'artist' ? 'Master Artisan' : 'Art Connoisseur'),
-        location: location || 'Bengaluru Local',
-        bio: bio || '',
-        isVerified: true
-      });
-
-      console.log(`✅ Registered new ${role} in MongoDB Atlas (${mongoose.connection.name}):`, user._id, user.name);
-
-      const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-      return res.status(201).json({
-        token,
-        user: {
-          id: user._id.toString(),
-          name: user.name,
-          role: user.role,
-          phone: user.phone,
-          email: user.email,
-          location: user.location,
-          bio: user.bio,
-          isVerified: user.isVerified
-        }
-      });
-    } else {
-      // Memory fallback if MongoDB down
-      const digits = cleanDigits(cleanPh || '');
-      const existing = memoryUsers.find(u => {
-        const phMatch = cleanPh && cleanDigits(u.phone).slice(-10) === digits.slice(-10);
-        const emMatch = normEmail && normalizeEmail(u.email) === normEmail;
-        return (phMatch || emMatch) && u.role === role;
-      });
-      if (existing) {
-        return res.status(400).json({ message: 'User already registered. Please Sign In.' });
-      }
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const user = {
-        _id: `usr-${Date.now()}`,
-        phone: cleanPh,
-        email: normEmail,
-        password: hashedPassword,
-        role: role || 'buyer',
-        name: name || (role === 'artist' ? 'Master Artisan' : 'Art Connoisseur'),
-        location: location || 'Bengaluru Local',
-        bio: bio || '',
-        isVerified: true
-      };
-      memoryUsers.push(user);
-      const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-      return res.status(201).json({
-        token,
-        user: {
-          id: user._id,
-          name: user.name,
-          role: user.role,
-          phone: user.phone,
-          email: user.email,
-          location: user.location,
-          bio: user.bio,
-          isVerified: user.isVerified
-        }
+    const existingUser = await User.findOne(existingQuery);
+    if (existingUser) {
+      return res.status(400).json({
+        message: `An account with this ${cleanPh ? 'phone number' : 'email'} is already registered as a ${targetRole}. Please Sign In instead.`
       });
     }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      phone: cleanPh,
+      email: normEmail,
+      password: hashedPassword,
+      role: targetRole,
+      name: (name && name.trim()) || (targetRole === 'artist' ? 'Master Artisan' : 'Art Connoisseur'),
+      location: (location && location.trim()) || 'Bengaluru Local',
+      bio: bio || '',
+      isVerified: true
+    });
+
+    console.log(`✅ Registered new ${targetRole} in MongoDB Atlas (${mongoose.connection.name}):`, user._id, user.name);
+
+    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.status(201).json({
+      token,
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        role: user.role,
+        phone: user.phone,
+        email: user.email,
+        location: user.location,
+        bio: user.bio,
+        isVerified: user.isVerified
+      }
+    });
   } catch (err: any) {
     console.error('Registration error:', err);
     return res.status(500).json({ message: err.message || 'Registration failed' });
@@ -373,38 +393,37 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return res.json({ token, user: demoUser });
     }
 
-    let user: any = null;
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({
+        message: 'Could not connect to MongoDB Atlas database right now. Please try again in a few seconds.'
+      });
+    }
 
-    if (isMongoReady()) {
-      let query: any = {};
-      if (role) query.role = role;
+    const query: any = {};
+    if (role) query.role = role;
 
-      if (cleanPh) {
-        const digits = cleanDigits(cleanPh);
-        const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+    if (cleanPh) {
+      const digits = cleanDigits(cleanPh);
+      const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+      if (last10.length > 0) {
         const flexibleRegex = last10.split('').join('[\\s-]*');
         query.$or = [
           { phone: cleanPh },
           { phone: { $regex: flexibleRegex + '$', $options: 'i' } }
         ];
-      } else if (normEmail) {
-        query.email = normEmail;
+      } else {
+        query.phone = cleanPh;
       }
-
-      user = await User.findOne(query);
-    } else {
-      const digits = cleanDigits(cleanPh);
-      user = memoryUsers.find(u => {
-        const phMatch = cleanPh && cleanDigits(u.phone).slice(-10) === digits.slice(-10);
-        const emMatch = normEmail && normalizeEmail(u.email) === normEmail;
-        const roleMatch = !role || u.role === role;
-        return (phMatch || emMatch) && roleMatch;
-      });
+    } else if (normEmail) {
+      query.email = normEmail;
     }
 
+    const user = await User.findOne(query);
+
     if (!user) {
-      return res.status(404).json({ 
-        message: `Account not found for this ${cleanPh ? 'phone' : 'email'} with role "${role || 'selected'}". Please check credentials or Create Account.` 
+      return res.status(404).json({
+        message: `Account not found for this ${cleanPh ? 'phone' : 'email'} with role "${role || 'selected'}". Please check credentials or Create Account.`
       });
     }
 
@@ -413,11 +432,11 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return res.status(401).json({ message: 'Incorrect password. Please verify and try again.' });
     }
 
-    const token = jwt.sign({ id: user._id || user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     return res.json({
       token,
       user: {
-        id: (user._id || user.id).toString(),
+        id: user._id.toString(),
         name: user.name,
         role: user.role,
         phone: user.phone,
@@ -438,38 +457,37 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 // Get all artworks from MongoDB Atlas
 app.get('/api/artworks', async (_req: Request, res: Response) => {
   try {
-    if (isMongoReady()) {
-      let artworks = await Artwork.find().sort({ createdAt: -1 });
-      
-      // Auto-seed if collection is empty
-      if (artworks.length === 0) {
-        await Artwork.insertMany(SEED_ARTWORKS);
-        artworks = await Artwork.find().sort({ createdAt: -1 });
-      }
-
-      const mapped = artworks.map(art => ({
-        id: art._id.toString(),
-        _id: art._id.toString(),
-        title: art.title,
-        artist: art.artist,
-        category: art.category,
-        price: art.price,
-        medium: art.medium || 'Canvas & Mixed Medium',
-        dimensions: art.dimensions || 'Custom Size',
-        description: art.description,
-        imageUrl: art.imageUrl,
-        location: art.location,
-        likes: art.likes || 0,
-        featured: art.featured || false,
-        createdAt: art.createdAt
-      }));
-      return res.json(mapped);
-    } else {
-      return res.json(memoryArtworks);
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
     }
+
+    let artworks = await Artwork.find().sort({ createdAt: -1 });
+    if (artworks.length === 0) {
+      await Artwork.insertMany(SEED_ARTWORKS);
+      artworks = await Artwork.find().sort({ createdAt: -1 });
+    }
+
+    const mapped = artworks.map(art => ({
+      id: art._id.toString(),
+      _id: art._id.toString(),
+      title: art.title,
+      artist: art.artist,
+      category: art.category,
+      price: art.price,
+      medium: art.medium || 'Canvas & Mixed Medium',
+      dimensions: art.dimensions || 'Custom Size',
+      description: art.description,
+      imageUrl: art.imageUrl,
+      location: art.location,
+      likes: art.likes || 0,
+      featured: art.featured || false,
+      createdAt: art.createdAt
+    }));
+    return res.json(mapped);
   } catch (err: any) {
     console.error('Fetch artworks error:', err);
-    return res.status(500).json({ error: 'Failed to retrieve artworks from database' });
+    return res.status(500).json({ message: 'Failed to retrieve artworks from database' });
   }
 });
 
@@ -482,6 +500,11 @@ app.post('/api/artworks', async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'Title, category, and price are required' });
     }
 
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable. Artwork could not be saved.' });
+    }
+
     const artworkPayload = {
       title: title.trim(),
       artist: (artist || 'Local Artisan').trim(),
@@ -490,37 +513,45 @@ app.post('/api/artworks', async (req: Request, res: Response) => {
       medium: medium ? medium.trim() : 'Canvas & Acrylic',
       dimensions: dimensions ? dimensions.trim() : 'Standard',
       description: description ? description.trim() : '',
-      imageUrl: imageUrl && imageUrl.trim().length > 5 
-        ? imageUrl.trim() 
+      imageUrl: imageUrl && imageUrl.trim().length > 5
+        ? imageUrl.trim()
         : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80',
       location: location ? location.trim() : 'Bengaluru Local',
       likes: 1,
       featured: false
     };
 
-    if (isMongoReady()) {
-      const newArtwork = await Artwork.create(artworkPayload);
-      console.log(`✅ Saved artwork to MongoDB Atlas (${mongoose.connection.name}):`, newArtwork._id, newArtwork.title);
-      return res.status(201).json({
-        id: newArtwork._id.toString(),
-        _id: newArtwork._id.toString(),
-        ...artworkPayload,
-        createdAt: newArtwork.createdAt
-      });
-    } else {
-      console.warn('⚠️ MongoDB not connected at enlistment time; adding to memory fallback');
-      const item = {
-        id: `art-${Date.now()}`,
-        _id: `art-${Date.now()}`,
-        ...artworkPayload,
-        createdAt: new Date().toISOString()
-      };
-      memoryArtworks.unshift(item);
-      return res.status(201).json(item);
-    }
+    const newArtwork = await Artwork.create(artworkPayload);
+    console.log(`✅ Saved artwork to MongoDB Atlas (${mongoose.connection.name}):`, newArtwork._id, newArtwork.title);
+    return res.status(201).json({
+      id: newArtwork._id.toString(),
+      _id: newArtwork._id.toString(),
+      ...artworkPayload,
+      createdAt: newArtwork.createdAt
+    });
   } catch (err: any) {
     console.error('Add artwork error:', err);
     return res.status(400).json({ message: err.message || 'Failed to list artwork' });
+  }
+});
+
+// Toggle like count in MongoDB Atlas
+app.patch('/api/artworks/:id/like', async (req: Request, res: Response) => {
+  try {
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
+    }
+    const delta = req.body?.liked ? 1 : -1;
+    const updated = await Artwork.findByIdAndUpdate(
+      req.params.id,
+      { $inc: { likes: delta } },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ message: 'Artwork not found' });
+    return res.json({ id: updated._id.toString(), likes: Math.max(0, updated.likes || 0) });
+  } catch (err: any) {
+    return res.status(400).json({ message: err.message || 'Failed to update likes' });
   }
 });
 
@@ -528,50 +559,58 @@ app.post('/api/artworks', async (req: Request, res: Response) => {
 
 app.get('/api/custom-requests', async (_req: Request, res: Response) => {
   try {
-    if (isMongoConnected) {
-      const requests = await CustomRequest.find().sort({ createdAt: -1 });
-      const mapped = requests.map(r => ({
-        id: r._id.toString(),
-        _id: r._id.toString(),
-        buyerName: r.buyerName,
-        title: r.title,
-        category: r.category,
-        budgetMin: r.budgetMin,
-        budgetMax: r.budgetMax,
-        deadline: r.deadline,
-        description: r.description,
-        location: r.location,
-        status: r.status,
-        bids: r.bids || [],
-        createdAt: r.createdAt
-      }));
-      return res.json(mapped);
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
     }
-    return res.json(memoryRequests);
-  } catch {
-    return res.json(memoryRequests);
+
+    let requests = await CustomRequest.find().sort({ createdAt: -1 });
+    if (requests.length === 0) {
+      await CustomRequest.insertMany(SEED_REQUESTS);
+      requests = await CustomRequest.find().sort({ createdAt: -1 });
+    }
+
+    const mapped = requests.map(r => ({
+      id: r._id.toString(),
+      _id: r._id.toString(),
+      buyerName: r.buyerName,
+      title: r.title,
+      category: r.category,
+      budgetMin: r.budgetMin,
+      budgetMax: r.budgetMax,
+      deadline: r.deadline,
+      description: r.description,
+      location: r.location,
+      status: r.status,
+      bids: r.bids || [],
+      createdAt: r.createdAt
+    }));
+    return res.json(mapped);
+  } catch (err: any) {
+    console.error('Fetch custom requests error:', err);
+    return res.status(500).json({ message: 'Failed to retrieve custom requests' });
   }
 });
 
 app.post('/api/custom-requests', async (req: Request, res: Response) => {
   try {
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
+    }
+
     const payload = {
       ...req.body,
       status: 'open',
       bids: []
     };
-    if (isMongoConnected) {
-      const created = await CustomRequest.create(payload);
-      return res.status(201).json({
-        id: created._id.toString(),
-        _id: created._id.toString(),
-        ...payload,
-        createdAt: created.createdAt
-      });
-    }
-    const memReq = { id: `req-${Date.now()}`, _id: `req-${Date.now()}`, ...payload, createdAt: new Date().toISOString() };
-    memoryRequests.unshift(memReq);
-    return res.status(201).json(memReq);
+    const created = await CustomRequest.create(payload);
+    return res.status(201).json({
+      id: created._id.toString(),
+      _id: created._id.toString(),
+      ...payload,
+      createdAt: created.createdAt
+    });
   } catch (err: any) {
     return res.status(400).json({ message: err.message });
   }
@@ -579,6 +618,11 @@ app.post('/api/custom-requests', async (req: Request, res: Response) => {
 
 app.post('/api/bids', async (req: Request, res: Response) => {
   try {
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
+    }
+
     const { requestId, artistName, amount, daysEst, proposal } = req.body;
     const bidObj = {
       id: `bid-${Date.now()}`,
@@ -590,13 +634,40 @@ app.post('/api/bids', async (req: Request, res: Response) => {
       timestamp: 'Just now'
     };
 
-    if (isMongoConnected && requestId) {
+    if (requestId && mongoose.Types.ObjectId.isValid(requestId)) {
       await CustomRequest.findByIdAndUpdate(requestId, {
         $push: { bids: bidObj }
       });
-      return res.status(201).json(bidObj);
     }
     return res.status(201).json(bidObj);
+  } catch (err: any) {
+    return res.status(400).json({ message: err.message });
+  }
+});
+
+app.patch('/api/custom-requests/:reqId/bids/:bidId/accept', async (req: Request, res: Response) => {
+  try {
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
+    }
+
+    const { reqId, bidId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(reqId)) {
+      return res.status(400).json({ message: 'Invalid request ID' });
+    }
+
+    const customReq = await CustomRequest.findById(reqId);
+    if (!customReq) return res.status(404).json({ message: 'Request not found' });
+
+    customReq.status = 'in-progress';
+    customReq.bids = (customReq.bids || []).map((b: any) => ({
+      ...b.toObject?.() || b,
+      status: b.id === bidId ? 'Accepted' : (b.status === 'Accepted' ? 'Accepted' : 'Pending')
+    }));
+    await customReq.save();
+
+    return res.json({ status: customReq.status, bids: customReq.bids });
   } catch (err: any) {
     return res.status(400).json({ message: err.message });
   }
@@ -606,24 +677,60 @@ app.post('/api/bids', async (req: Request, res: Response) => {
 
 app.get('/api/auctions', async (_req: Request, res: Response) => {
   try {
-    if (isMongoConnected) {
-      const auctions = await Auction.find();
-      return res.json(auctions.map(a => ({
-        id: a._id.toString(),
-        _id: a._id.toString(),
-        title: a.title,
-        artist: a.artist,
-        category: a.category,
-        startingBid: a.startingBid,
-        currentBid: a.currentBid,
-        endTime: a.endTime,
-        imageUrl: a.imageUrl,
-        bidsCount: a.bidsCount
-      })));
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
     }
-    return res.json(SEED_AUCTIONS);
-  } catch {
-    return res.json(SEED_AUCTIONS);
+
+    let auctions = await Auction.find();
+    if (auctions.length === 0) {
+      await Auction.insertMany(SEED_AUCTIONS);
+      auctions = await Auction.find();
+    }
+
+    return res.json(auctions.map(a => ({
+      id: a._id.toString(),
+      _id: a._id.toString(),
+      title: a.title,
+      artist: a.artist,
+      category: a.category,
+      startingBid: a.startingBid,
+      currentBid: a.currentBid,
+      endTime: a.endTime,
+      imageUrl: a.imageUrl,
+      bidsCount: a.bidsCount
+    })));
+  } catch (err: any) {
+    console.error('Fetch auctions error:', err);
+    return res.status(500).json({ message: 'Failed to retrieve auctions' });
+  }
+});
+
+app.post('/api/auctions/:id/bid', async (req: Request, res: Response) => {
+  try {
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      return res.status(503).json({ message: 'Database unavailable' });
+    }
+    const { amount } = req.body;
+    const auction = await Auction.findById(req.params.id);
+    if (!auction) return res.status(404).json({ message: 'Auction not found' });
+
+    if (Number(amount) <= (auction.currentBid || 0)) {
+      return res.status(400).json({ message: `Bid must be higher than current price (${auction.currentBid})` });
+    }
+
+    auction.currentBid = Number(amount);
+    auction.bidsCount = (auction.bidsCount || 0) + 1;
+    await auction.save();
+
+    return res.json({
+      id: auction._id.toString(),
+      currentBid: auction.currentBid,
+      bidsCount: auction.bidsCount
+    });
+  } catch (err: any) {
+    return res.status(400).json({ message: err.message });
   }
 });
 
@@ -639,7 +746,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req, res) => {
+    app.get('/{*splat}', (_req, res) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }
@@ -650,3 +757,4 @@ async function startServer() {
 }
 
 startServer();
+

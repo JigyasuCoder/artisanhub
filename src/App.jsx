@@ -303,24 +303,8 @@ export default function App() {
   // Helper function to format prices in INR (₹)
   const formatPrice = (price) => `₹${Number(price).toLocaleString('en-IN')}`;
 
-  // Check live MongoDB Atlas status
-  const checkDbStatus = () => {
-    fetch(`${API_BASE_URL}/db-status`)
-      .then(res => res.json())
-      .then(data => {
-        setDbStatus({
-          connected: !!data.connected,
-          database: data.database || 'artisanhub',
-          checked: true
-        });
-      })
-      .catch(() => setDbStatus({ connected: false, database: 'offline', checked: true }));
-  };
-
-  // Fetch initial data from full-stack MongoDB Express API
-  useEffect(() => {
-    checkDbStatus();
-
+  // Fetch latest catalog, requests, and auctions directly from MongoDB Atlas
+  const fetchMarketplaceData = () => {
     fetch(`${API_BASE_URL}/artworks`)
       .then((res) => {
         if (!res.ok) throw new Error("API not available");
@@ -328,7 +312,6 @@ export default function App() {
       })
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          // Direct sync with MongoDB Atlas collection
           setProducts(data);
           try {
             localStorage.setItem('artisanhub_products_cache', JSON.stringify(data));
@@ -365,6 +348,62 @@ export default function App() {
         if (Array.isArray(data) && data.length > 0) setAuctions(data);
       })
       .catch(() => {});
+  };
+
+  // Check live MongoDB Atlas status
+  const checkDbStatus = () => {
+    fetch(`${API_BASE_URL}/db-status`)
+      .then(res => res.json())
+      .then(data => {
+        const isConnected = !!data.connected;
+        setDbStatus({
+          connected: isConnected,
+          database: data.database || 'artisanhub',
+          checked: true
+        });
+        if (isConnected) {
+          fetchMarketplaceData();
+        }
+      })
+      .catch(() => setDbStatus({ connected: false, database: 'offline', checked: true }));
+  };
+
+  // Fetch initial data and poll db-status until MongoDB Atlas is connected
+  useEffect(() => {
+    let isMounted = true;
+    let timerId;
+
+    const pollStatus = () => {
+      fetch(`${API_BASE_URL}/db-status`)
+        .then(res => res.json())
+        .then(data => {
+          if (!isMounted) return;
+          const isConnected = !!data.connected;
+          setDbStatus({
+            connected: isConnected,
+            database: data.database || 'artisanhub',
+            checked: true
+          });
+          if (isConnected) {
+            fetchMarketplaceData();
+          } else {
+            timerId = setTimeout(pollStatus, 3000);
+          }
+        })
+        .catch(() => {
+          if (!isMounted) return;
+          setDbStatus({ connected: false, database: 'offline', checked: true });
+          timerId = setTimeout(pollStatus, 3000);
+        });
+    };
+
+    fetchMarketplaceData();
+    pollStatus();
+
+    return () => {
+      isMounted = false;
+      if (timerId) clearTimeout(timerId);
+    };
   }, []);
 
   // Extract distinct artists & categories for filter bar
@@ -399,7 +438,7 @@ export default function App() {
     return 0;
   });
 
-  // Successful auth callback from AuthPage - Saves session persistently
+  // Successful auth callback from AuthPage - Saves session persistently & syncs live DB
   const handleAuthSuccess = (userData) => {
     setCurrentUser(userData);
     setIsAuthenticated(true);
@@ -410,6 +449,8 @@ export default function App() {
     } catch (e) {
       console.warn('Failed to save auth to localStorage:', e);
     }
+    checkDbStatus();
+    fetchMarketplaceData();
     showNotification(`Welcome, ${userData.name}! Authenticated as ${userData.role === 'artist' ? 'Artisan' : 'Buyer'}.`);
   };
 
@@ -456,10 +497,15 @@ export default function App() {
       } catch (e) {
         console.warn(e);
       }
+      fetch(`${API_BASE_URL}/artworks/${artId}/like`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ liked: isLiked })
+      }).catch(() => {});
       setProducts(cur => {
         const nextProducts = cur.map(p => {
           if (p.id === artId || p._id === artId) {
-            return { ...p, likes: (p.likes || 0) + (isLiked ? 1 : -1) };
+            return { ...p, likes: Math.max(0, (p.likes || 0) + (isLiked ? 1 : -1)) };
           }
           return p;
         });
@@ -526,7 +572,7 @@ export default function App() {
     }
   };
 
-  // Submit custom demand request
+  // Submit custom demand request -> Persists to MongoDB Atlas
   const handleCreateRequestSubmit = async (e) => {
     e.preventDefault();
     const reqData = {
@@ -543,88 +589,98 @@ export default function App() {
       bids: []
     };
 
-    let createdReq = { id: `req-${Date.now()}`, ...reqData };
-
     try {
       const res = await fetch(`${API_BASE_URL}/custom-requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reqData)
       });
-      if (res.ok) {
-        createdReq = await res.json();
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        showNotification(`Could not save request to MongoDB: ${data.message || 'Server error'}`);
+        return;
       }
-    } catch {
-      console.log("Saved locally to state.");
+
+      setBuyerRequests(prev => {
+        const updated = [data, ...prev];
+        try {
+          localStorage.setItem('artisanhub_requests_cache', JSON.stringify(updated));
+        } catch (err) {
+          console.warn(err);
+        }
+        return updated;
+      });
+
+      setIsCreateRequestOpen(false);
+      setNewReqForm({ title: '', category: 'Modern Art', budgetMin: '', budgetMax: '', deadline: '', description: '' });
+      showNotification("Custom demand posted to MongoDB Atlas! Local artists notified.");
+    } catch (err) {
+      showNotification(`Database network error: ${err.message || 'Failed to reach server'}`);
     }
-
-    setBuyerRequests(prev => {
-      const updated = [createdReq, ...prev];
-      try {
-        localStorage.setItem('artisanhub_requests_cache', JSON.stringify(updated));
-      } catch (e) {
-        console.warn(e);
-      }
-      return updated;
-    });
-
-    setIsCreateRequestOpen(false);
-    setNewReqForm({ title: '', category: 'Modern Art', budgetMin: '', budgetMax: '', deadline: '', description: '' });
-    showNotification("Custom demand posted successfully! Local artists notified.");
   };
 
-  // Artist Bids on Custom Demand
+  // Artist Bids on Custom Demand -> Persists to MongoDB Atlas
   const handleBidSubmit = async (e) => {
     e.preventDefault();
     if (!activeBidModalItem) return;
 
-    const bidData = {
-      id: `bid-${Date.now()}`,
+    const targetReqId = activeBidModalItem.id || activeBidModalItem._id;
+    const bidPayload = {
+      requestId: targetReqId,
       artistName: currentUser.name,
       amount: Number(bidForm.amount),
       daysEst: Number(bidForm.daysEst),
-      proposal: bidForm.proposal,
-      status: 'Pending',
-      timestamp: 'Just now'
+      proposal: bidForm.proposal
     };
 
     try {
-      await fetch(`${API_BASE_URL}/bids`, {
+      const res = await fetch(`${API_BASE_URL}/bids`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requestId: activeBidModalItem.id || activeBidModalItem._id,
-          ...bidData
-        })
+        body: JSON.stringify(bidPayload)
       });
-    } catch {
-      console.log("Bid saved locally.");
-    }
+      const savedBid = await res.json().catch(() => ({}));
 
-    setBuyerRequests(prev => {
-      const updated = prev.map(req => {
-        const targetId = req.id || req._id;
-        const activeId = activeBidModalItem.id || activeBidModalItem._id;
-        if (targetId === activeId) {
-          return { ...req, bids: req.bids ? [bidData, ...req.bids] : [bidData] };
-        }
-        return req;
-      });
-      try {
-        localStorage.setItem('artisanhub_requests_cache', JSON.stringify(updated));
-      } catch (e) {
-        console.warn(e);
+      if (!res.ok) {
+        showNotification(`Could not submit proposal to MongoDB: ${savedBid.message || 'Server error'}`);
+        return;
       }
-      return updated;
-    });
 
-    setActiveBidModalItem(null);
-    setBidForm({ amount: '', daysEst: '', proposal: '' });
-    showNotification("Proposal quote submitted to buyer!");
+      setBuyerRequests(prev => {
+        const updated = prev.map(req => {
+          const targetId = req.id || req._id;
+          if (targetId === targetReqId) {
+            return { ...req, bids: req.bids ? [savedBid, ...req.bids] : [savedBid] };
+          }
+          return req;
+        });
+        try {
+          localStorage.setItem('artisanhub_requests_cache', JSON.stringify(updated));
+        } catch (err) {
+          console.warn(err);
+        }
+        return updated;
+      });
+
+      setActiveBidModalItem(null);
+      setBidForm({ amount: '', daysEst: '', proposal: '' });
+      showNotification("Proposal quote saved to MongoDB & submitted to buyer!");
+    } catch (err) {
+      showNotification(`Database network error: ${err.message || 'Failed to reach server'}`);
+    }
   };
 
   // Buyer accepts an artist's proposal bid
-  const handleAcceptBid = (reqId, bidId, artistName) => {
+  const handleAcceptBid = async (reqId, bidId, artistName) => {
+    try {
+      await fetch(`${API_BASE_URL}/custom-requests/${reqId}/bids/${bidId}/accept`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch {
+      // ignore transient error
+    }
     setBuyerRequests(prev => prev.map(req => {
       const targetId = req.id || req._id;
       if (targetId === reqId) {
@@ -641,20 +697,37 @@ export default function App() {
     showNotification(`Proposal from ${artistName} accepted! Collaboration initiated.`);
   };
 
-  // Handle Auction Bidding
-  const handleAuctionBid = (aucId, numericBid) => {
-    setAuctions(prev => prev.map(auc => {
-      const targetId = auc.id || auc._id;
-      if (targetId === aucId) {
-        if (numericBid <= auc.currentBid) {
-          alert(`Bid must be higher than current price (${formatPrice(auc.currentBid)})`);
-          return auc;
-        }
-        showNotification(`Bid placed successfully for ${formatPrice(numericBid)}!`);
-        return { ...auc, currentBid: numericBid, bidsCount: (auc.bidsCount || 0) + 1 };
+  // Handle Auction Bidding -> Persists to MongoDB Atlas
+  const handleAuctionBid = async (aucId, numericBid) => {
+    const target = auctions.find(a => (a.id || a._id) === aucId);
+    if (target && numericBid <= target.currentBid) {
+      showNotification(`Bid must be higher than current price (${formatPrice(target.currentBid)})`);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auctions/${aucId}/bid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: numericBid })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showNotification(data.message || 'Could not place auction bid.');
+        return;
       }
-      return auc;
-    }));
+
+      setAuctions(prev => prev.map(auc => {
+        const targetId = auc.id || auc._id;
+        if (targetId === aucId) {
+          return { ...auc, currentBid: data.currentBid ?? numericBid, bidsCount: data.bidsCount ?? ((auc.bidsCount || 0) + 1) };
+        }
+        return auc;
+      }));
+      showNotification(`Bid placed successfully for ${formatPrice(numericBid)}!`);
+    } catch (err) {
+      showNotification(`Could not place bid: ${err.message || 'Network error'}`);
+    }
   };
 
   // Gate Dashboard behind authentication - Login page displayed first
