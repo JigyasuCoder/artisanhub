@@ -10,15 +10,20 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Connect to MongoDB Atlas
-const MONGO_URI = (process.env.MONGO_URI || 'mongodb+srv://aprameyapnk1_db_user:vMnImo2531T7fJbX@cluster0.foxp3dd.mongodb.net/artisanhub?retryWrites=true&w=majority').trim();
+// Connect to MongoDB Atlas if MONGO_URI is configured
+const MONGO_URI = (process.env.MONGO_URI || '').trim();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_artisanhub_key_123!';
 const rawDbName = (process.env.MONGO_DB_NAME || '').trim();
-const DB_NAME = (!rawDbName || rawDbName.includes('://') || /[/\\.\s"$*<>:|?@]/.test(rawDbName)) ? 'artisanhub' : rawDbName;
+const DB_NAME = (!rawDbName || rawDbName.includes('://') || /[/\\.\s"$*<>:|?@]/.test(rawDbName)) ? 'artisanhub' : rawDbName.toLowerCase();
 
-mongoose.connect(MONGO_URI, { dbName: DB_NAME })
-  .then(() => console.log('✅ Connected to MongoDB Atlas:', mongoose.connection.name))
-  .catch(err => console.warn('⚠️ MongoDB not connected:', err.message));
+mongoose.set('bufferCommands', false);
+if (MONGO_URI) {
+  mongoose.connect(MONGO_URI, { dbName: DB_NAME })
+    .then(() => console.log('✅ Connected to MongoDB Atlas:', mongoose.connection.name))
+    .catch(err => console.warn('⚠️ MongoDB not connected:', err.message));
+} else {
+  console.warn('⚠️ MONGO_URI not set — running without MongoDB');
+}
 
 const cleanDigits = (val) => (val || '').replace(/\D/g, '');
 const normalizeEmail = (val) => (val || '').trim().toLowerCase();

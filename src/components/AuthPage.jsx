@@ -9,8 +9,43 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
   const [role, setRole] = useState(currentRole); // 'buyer' | 'artist'
   const [verificationMethod, setVerificationMethod] = useState('phone'); // 'phone' | 'email'
   
-  // Database status indicator
-  const [dbInfo, setDbInfo] = useState({ connected: false, database: 'artisanhub', checked: false });
+  // Database status indicator & MSG91 OTP Widget configuration
+  const [dbInfo, setDbInfo] = useState({ connected: false, mode: 'connecting', database: 'artisanhub', checked: false });
+  const [otpConfig, setOtpConfig] = useState({ loaded: false, configured: false, widgetId: '', tokenAuth: '' });
+  const [widgetReady, setWidgetReady] = useState(false);
+
+  // Form fields
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [location, setLocation] = useState('Indiranagar, Bengaluru');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpReqId, setOtpReqId] = useState('');
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [isVerified, setIsVerified] = useState(false);
+  const [pendingAccessToken, setPendingAccessToken] = useState('');
+  const [otpVerificationToken, setOtpVerificationToken] = useState('');
+  const [copiedPassword, setCopiedPassword] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const reinitMsg91Widget = (widgetId, tokenAuth) => {
+    if (typeof window.initSendOTP !== 'function' || !widgetId || !tokenAuth) return false;
+    window.initSendOTP({
+      widgetId,
+      tokenAuth,
+      exposeMethods: true,
+      success: () => {},
+      failure: () => {}
+    });
+    setWidgetReady(true);
+    return true;
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -22,14 +57,20 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
         .then(data => {
           if (!isMounted) return;
           const isConnected = !!data.connected;
-          setDbInfo({ connected: isConnected, database: data.database || 'artisanhub', checked: true });
-          if (!isConnected) {
+          const isInMemory = data.mode === 'in-memory';
+          setDbInfo({
+            connected: isConnected,
+            mode: data.mode || (isConnected ? 'mongodb' : 'in-memory'),
+            database: data.database || 'artisanhub',
+            checked: true
+          });
+          if (!isConnected && !isInMemory) {
             timerId = setTimeout(checkStatus, 3000);
           }
         })
         .catch(() => {
           if (!isMounted) return;
-          setDbInfo({ connected: false, database: 'offline', checked: true });
+          setDbInfo({ connected: false, mode: 'offline', database: 'offline', checked: true });
           timerId = setTimeout(checkStatus, 3000);
         });
     };
@@ -41,20 +82,145 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
     };
   }, [apiBaseUrl]);
 
-  // Form fields
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('+91 98765 43210');
-  const [email, setEmail] = useState('');
-  const [location, setLocation] = useState('Indiranagar, Bengaluru');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [isVerified, setIsVerified] = useState(false);
-  const [copiedPassword, setCopiedPassword] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  // Fetch MSG91 widget credentials from backend and initialize otp-provider.js
+  useEffect(() => {
+    let isMounted = true;
+
+    const initMsg91Widget = (widgetId, tokenAuth) => {
+      const configure = () => {
+        if (!isMounted || typeof window.initSendOTP !== 'function') return;
+        window.initSendOTP({
+          widgetId,
+          tokenAuth,
+          exposeMethods: true,
+          success: () => {},
+          failure: () => {}
+        });
+        setWidgetReady(true);
+      };
+
+      if (typeof window.initSendOTP === 'function') {
+        configure();
+        return;
+      }
+
+      const existingScript = document.querySelector('script[data-msg91-otp="true"]');
+      if (existingScript) {
+        existingScript.addEventListener('load', configure, { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://verify.msg91.com/otp-provider.js';
+      script.async = true;
+      script.dataset.msg91Otp = 'true';
+      script.onload = configure;
+      script.onerror = () => {
+        if (isMounted) {
+          setErrorMessage('Could not load MSG91 OTP widget script. Please check network/CSP access.');
+        }
+      };
+      document.body.appendChild(script);
+    };
+
+    fetch(`${apiBaseUrl}/otp/config`)
+      .then(res => res.json())
+      .then(data => {
+        if (!isMounted) return;
+        const configured = Boolean(data?.configured && data?.widgetId && data?.tokenAuth);
+        setOtpConfig({
+          loaded: true,
+          configured,
+          widgetId: data?.widgetId || '',
+          tokenAuth: data?.tokenAuth || ''
+        });
+        if (configured) {
+          initMsg91Widget(data.widgetId, data.tokenAuth);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setOtpConfig({ loaded: true, configured: false, widgetId: '', tokenAuth: '' });
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [apiBaseUrl]);
+
+  // Format phone (country code without '+', defaulting 10-digit Indian numbers to 91) or email for MSG91
+  const formatMsg91Identifier = () => {
+    if (verificationMethod === 'email') {
+      return email.trim().toLowerCase();
+    }
+    const digits = phone.replace(/\D/g, '');
+    if (!digits) return '';
+    return digits.length === 10 ? `91${digits}` : digits;
+  };
+
+  const resetOtpState = () => {
+    setOtpSent(false);
+    setOtpReqId('');
+    setOtpCode('');
+    setIsVerified(false);
+    setPendingAccessToken('');
+    setOtpVerificationToken('');
+  };
+
+  // Extract readable error message from MSG91 widget error objects
+  const extractMsg91Error = (err, fallback) => {
+    if (!err) return fallback;
+    if (typeof err === 'string') return err;
+    const firstArrayErr = Array.isArray(err.errors)
+      ? typeof err.errors[0] === 'string'
+        ? err.errors[0]
+        : err.errors[0]?.message
+      : '';
+    return (
+      err.message ||
+      err.error?.message ||
+      (typeof err.error === 'string' ? err.error : '') ||
+      err.data?.message ||
+      firstArrayErr ||
+      fallback
+    );
+  };
+
+  // Extract JWT access token from MSG91 widget callback payload
+  const extractMsg91AccessToken = (payload) => {
+    if (!payload) return '';
+    if (typeof payload === 'string') return payload.trim();
+    const isJwt = (v) =>
+      typeof v === 'string' && /^[A-Za-z0-9_+/=-]+\.[A-Za-z0-9_+/=-]+\.[A-Za-z0-9_+/=-]+$/.test(v.trim());
+    const candidates = [
+      payload['access-token'],
+      payload.accessToken,
+      payload.token,
+      payload.data?.['access-token'],
+      payload.data?.accessToken,
+      payload.data?.token,
+      payload.message,
+      payload.data?.message,
+      ...Object.entries(payload)
+        .filter(([k]) => k !== 'type' && k !== 'code')
+        .map(([, v]) => v),
+      ...(payload.data && typeof payload.data === 'object'
+        ? Object.entries(payload.data)
+            .filter(([k]) => k !== 'type' && k !== 'code')
+            .map(([, v]) => v)
+        : [])
+    ];
+    const jwtMatch = candidates.find(isJwt);
+    if (jwtMatch) return jwtMatch.trim();
+    const nonStatusText = candidates.find(
+      (v) =>
+        typeof v === 'string' &&
+        v.trim() &&
+        !/^(otp|access token)?\s*verified(\s+successfully)?$/i.test(v.trim())
+    );
+    return (nonStatusText || '').trim();
+  };
 
   // Helper to get local accounts registry
   const getLocalAccounts = () => {
@@ -131,25 +297,195 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
 
   const strength = getPasswordStrength(password);
 
-  // Send Verification Code
-  const handleSendVerification = (e) => {
-    e.preventDefault();
-    setOtpSent(true);
-    setErrorMessage('');
-    setTimeout(() => {
-      setOtpCode('8492');
-    }, 400);
-  };
+  // Validate MSG91 JWT access-token on our backend before unlocking account creation
+  const verifyAccessTokenWithBackend = async (accessToken) => {
+    setIsVerifyingOtp(true);
+    setPendingAccessToken(accessToken);
+    try {
+      const res = await fetch(`${apiBaseUrl}/auth/verify-otp-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accessToken,
+          identifier: formatMsg91Identifier()
+        })
+      });
 
-  // Verify Code
-  const handleVerifyCode = () => {
-    if (otpCode.length >= 4) {
+      const backendData = await res.json().catch(() => ({}));
+      if (!res.ok || !backendData?.verified || !backendData?.otpVerificationToken) {
+        setIsVerifyingOtp(false);
+        setErrorMessage(backendData?.message || 'Backend OTP token verification failed.');
+        return;
+      }
+
+      setIsVerifyingOtp(false);
       setIsVerified(true);
-      setSuccessMessage('Verification code confirmed.');
+      setPendingAccessToken('');
+      setOtpVerificationToken(backendData.otpVerificationToken);
+      setSuccessMessage('Phone/Email verified securely via MSG91!');
+    } catch (err) {
+      setIsVerifyingOtp(false);
+      setErrorMessage(err?.message || 'Error verifying OTP token with server.');
     }
   };
 
-  // Submit Sign In or Register with strict credential validation
+  // Send Real OTP via MSG91 Widget
+  const handleSendVerification = (e) => {
+    e.preventDefault();
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    const formattedId = formatMsg91Identifier();
+    if (!formattedId) {
+      setErrorMessage(`Please enter a valid ${verificationMethod === 'phone' ? 'mobile number' : 'email address'} first.`);
+      return;
+    }
+
+    if (!otpConfig.configured) {
+      setErrorMessage('MSG91 OTP widget credentials (MSG91_WIDGET_ID & MSG91_TOKEN_AUTH) are not configured on the server.');
+      return;
+    }
+
+    if (!widgetReady || typeof window.sendOtp !== 'function') {
+      setErrorMessage('MSG91 OTP widget is still initializing. Please wait a moment and try again.');
+      return;
+    }
+
+    setIsSendingOtp(true);
+    setIsVerified(false);
+    setOtpReqId('');
+    setPendingAccessToken('');
+    setOtpVerificationToken('');
+
+    const onSendSuccess = (sendRes) => {
+      setIsSendingOtp(false);
+      const invisibleToken = sendRes?.invisibleVerified ? extractMsg91AccessToken(sendRes) : '';
+      if (invisibleToken) {
+        verifyAccessTokenWithBackend(invisibleToken);
+        return;
+      }
+      const reqId =
+        sendRes?.data?.request_id ||
+        sendRes?.data?.requestId ||
+        sendRes?.data?.reqId ||
+        (typeof sendRes?.message === 'string' ? sendRes.message.trim() : '');
+      setOtpReqId(String(reqId || '').trim());
+      setOtpSent(true);
+      setOtpCode('');
+      setSuccessMessage(
+        `OTP sent via MSG91 to ${verificationMethod === 'phone' ? phone.trim() : email.trim()}. Please check your ${verificationMethod === 'phone' ? 'SMS' : 'inbox'}.`
+      );
+    };
+
+    const onSendFailure = (err) => {
+      const errMsg = extractMsg91Error(err, 'Failed to send OTP via MSG91.');
+      if (/already verified/i.test(errMsg) && otpConfig.widgetId && otpConfig.tokenAuth) {
+        reinitMsg91Widget(otpConfig.widgetId, otpConfig.tokenAuth);
+        setTimeout(() => {
+          window.sendOtp(formattedId, onSendSuccess, (retryErr) => {
+            setIsSendingOtp(false);
+            setErrorMessage(extractMsg91Error(retryErr, 'Failed to send OTP via MSG91.'));
+          });
+        }, 250);
+        return;
+      }
+      setIsSendingOtp(false);
+      setErrorMessage(errMsg);
+    };
+
+    window.sendOtp(formattedId, onSendSuccess, onSendFailure);
+  };
+
+  // Verify Code directly on backend via MSG91 Widget API (or fallback to widget verifyOtp + verifyAccessToken)
+  const handleVerifyCode = async () => {
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    // If we already received an access token from MSG91, retry backend validation directly
+    if (pendingAccessToken) {
+      verifyAccessTokenWithBackend(pendingAccessToken);
+      return;
+    }
+
+    const trimmedOtp = otpCode.trim();
+    if (trimmedOtp.length < 4) {
+      setErrorMessage('Please enter the OTP received on your device.');
+      return;
+    }
+
+    if (otpReqId) {
+      setIsVerifyingOtp(true);
+      try {
+        const res = await fetch(`${apiBaseUrl}/auth/verify-otp-code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            otp: trimmedOtp,
+            reqId: otpReqId,
+            identifier: formatMsg91Identifier()
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.verified && data?.otpVerificationToken) {
+          setIsVerifyingOtp(false);
+          setIsVerified(true);
+          setOtpVerificationToken(data.otpVerificationToken);
+          setSuccessMessage('Phone/Email verified securely via MSG91!');
+          return;
+        }
+        setIsVerifyingOtp(false);
+        const errMsg = data?.message || 'Invalid or expired OTP. Please check the code and try again.';
+        if (/already verified/i.test(errMsg)) {
+          reinitMsg91Widget(otpConfig.widgetId, otpConfig.tokenAuth);
+          setOtpSent(false);
+          setOtpReqId('');
+          setOtpCode('');
+          setErrorMessage('That OTP session was already verified on MSG91. Click "Send OTP" to request a fresh code.');
+          return;
+        }
+        setErrorMessage(errMsg);
+      } catch (err) {
+        setIsVerifyingOtp(false);
+        setErrorMessage(err?.message || 'Error verifying OTP with server.');
+      }
+      return;
+    }
+
+    if (typeof window.verifyOtp !== 'function') {
+      setErrorMessage('MSG91 verification widget is not ready. Please try again.');
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+
+    window.verifyOtp(
+      trimmedOtp,
+      async (widgetData) => {
+        const accessToken = extractMsg91AccessToken(widgetData);
+        if (!accessToken) {
+          setIsVerifyingOtp(false);
+          setErrorMessage('MSG91 verified OTP but did not return an access token.');
+          return;
+        }
+        await verifyAccessTokenWithBackend(accessToken);
+      },
+      (err) => {
+        setIsVerifyingOtp(false);
+        const errMsg = extractMsg91Error(err, 'Invalid or expired OTP. Please check the code and try again.');
+        if (/already verified/i.test(errMsg)) {
+          reinitMsg91Widget(otpConfig.widgetId, otpConfig.tokenAuth);
+          setOtpSent(false);
+          setOtpReqId('');
+          setOtpCode('');
+          setErrorMessage('That OTP session was already verified on MSG91. Click "Send OTP" to request a fresh code.');
+          return;
+        }
+        setErrorMessage(errMsg);
+      }
+    );
+  };
+
+  // Submit Sign In or Register with strict credential & OTP verification
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
@@ -170,6 +506,12 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
       return;
     }
 
+    if (authMode === 'register' && (!isVerified || !otpVerificationToken)) {
+      setErrorMessage(`Please send and verify the OTP sent to your ${verificationMethod === 'phone' ? 'phone number' : 'email'} before creating an account.`);
+      setIsLoading(false);
+      return;
+    }
+
     const payload = {
       phone: verificationMethod === 'phone' ? identifier : undefined,
       email: verificationMethod === 'email' ? identifier : undefined,
@@ -179,10 +521,11 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
       location: location.trim() || 'Bengaluru Local',
       bio: role === 'artist' 
         ? 'Specializing in authentic handmade artworks and custom commissions.' 
-        : 'Passionate collector of fine local and heritage art.'
+        : 'Passionate collector of fine local and heritage art.',
+      otpVerificationToken: authMode === 'register' ? otpVerificationToken : undefined
     };
 
-    // Mode 1: REGISTRATION (Save directly to MongoDB Atlas)
+    // Mode 1: REGISTRATION (Only after backend-verified MSG91 OTP token)
     if (authMode === 'register') {
       try {
         const res = await fetch(`${apiBaseUrl}/auth/register`, {
@@ -202,7 +545,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
         if (res.ok && data.user) {
           saveLocalAccount({ ...payload, id: data.user.id });
           setIsLoading(false);
-          setSuccessMessage('Account created and saved in MongoDB Atlas! Signing you in...');
+          setSuccessMessage('Account created and verified! Signing you in...');
           setTimeout(() => {
             onAuthSuccess(data.user);
           }, 600);
@@ -211,19 +554,19 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           setErrorMessage(
             data.message ||
             data.error ||
-            `Registration failed (HTTP ${res.status}). Could not save user to MongoDB database.`
+            `Registration failed (HTTP ${res.status}). Could not create account.`
           );
           setIsLoading(false);
           return;
         }
       } catch (netErr) {
         setIsLoading(false);
-        setErrorMessage(`Cannot reach database server (${netErr.message || 'Network error'}). Please verify MongoDB Atlas connection.`);
+        setErrorMessage(`Cannot reach server (${netErr.message || 'Network error'}). Please try again.`);
         return;
       }
     }
 
-    // Mode 2: SIGN IN (Strict credential checking against MongoDB Atlas)
+    // Mode 2: SIGN IN (Strict credential checking)
     if (authMode === 'signin') {
       try {
         const res = await fetch(`${apiBaseUrl}/auth/login`, {
@@ -247,7 +590,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
 
         if (res.ok && data.user) {
           setIsLoading(false);
-          setSuccessMessage('Credentials verified in MongoDB Atlas! Welcome back.');
+          setSuccessMessage('Credentials verified! Welcome back.');
           setTimeout(() => {
             onAuthSuccess(data.user);
           }, 400);
@@ -262,7 +605,6 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           return;
         }
       } catch (err) {
-        // Check demo accounts if network unreachable
         const isDemoMatch = 
           ((payload.phone === '+91 98765 43210' || payload.email === 'ananya.buyer@artisanhub.in') && role === 'buyer' && (password === 'buyer123' || password === 'demo123')) ||
           ((payload.phone === '+91 98450 11223' || payload.email === 'rohan.artist@artisanhub.in') && role === 'artist' && (password === 'artist123' || password === 'demo123'));
@@ -274,7 +616,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
         }
 
         setIsLoading(false);
-        setErrorMessage(`Cannot connect to database backend: ${err.message || 'Connection failed'}. Please check internet & server.`);
+        setErrorMessage(`Cannot connect to backend: ${err.message || 'Connection failed'}.`);
         return;
       }
     }
@@ -344,7 +686,11 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
             <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 inline-flex">
               <button
                 type="button"
-                onClick={() => setAuthMode('signin')}
+                onClick={() => {
+                  setAuthMode('signin');
+                  setErrorMessage('');
+                  setSuccessMessage('');
+                }}
                 className={`px-4 py-1.5 rounded-lg text-xs font-bold transition ${
                   authMode === 'signin' ? 'bg-amber-400 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
                 }`}
@@ -353,7 +699,11 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
               </button>
               <button
                 type="button"
-                onClick={() => setAuthMode('register')}
+                onClick={() => {
+                  setAuthMode('register');
+                  setErrorMessage('');
+                  setSuccessMessage('');
+                }}
                 className={`px-4 py-1.5 rounded-lg text-xs font-bold transition ${
                   authMode === 'register' ? 'bg-amber-400 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
                 }`}
@@ -461,12 +811,15 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                2. Verification Method *
+                2. {authMode === 'register' ? 'OTP Verification Method *' : 'Sign In Method *'}
               </label>
               <div className="flex gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
                   type="button"
-                  onClick={() => setVerificationMethod('phone')}
+                  onClick={() => {
+                    setVerificationMethod('phone');
+                    resetOtpState();
+                  }}
                   className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
                     verificationMethod === 'phone'
                       ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
@@ -477,7 +830,10 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                 </button>
                 <button
                   type="button"
-                  onClick={() => setVerificationMethod('email')}
+                  onClick={() => {
+                    setVerificationMethod('email');
+                    resetOtpState();
+                  }}
                   className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
                     verificationMethod === 'email'
                       ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
@@ -501,17 +857,33 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                       required
                       placeholder="+91 98765 43210"
                       value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
+                      onChange={(e) => {
+                        setPhone(e.target.value);
+                        if (otpSent || isVerified) resetOtpState();
+                      }}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-amber-400 font-mono"
                     />
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleSendVerification}
-                    className="bg-slate-800 hover:bg-slate-700 text-amber-400 px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-700 transition shrink-0"
-                  >
-                    {otpSent ? 'Resend SMS' : 'Send OTP'}
-                  </button>
+                  {authMode === 'register' && (
+                    <button
+                      type="button"
+                      disabled={isSendingOtp || isVerified}
+                      onClick={handleSendVerification}
+                      className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-amber-400 px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-700 transition shrink-0 flex items-center gap-1.5"
+                    >
+                      {isSendingOtp ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Sending...
+                        </>
+                      ) : isVerified ? (
+                        'Verified'
+                      ) : otpSent ? (
+                        'Resend OTP'
+                      ) : (
+                        'Send OTP'
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
@@ -525,27 +897,43 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                       required
                       placeholder="patron@artisanhub.in"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        if (otpSent || isVerified) resetOtpState();
+                      }}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-amber-400"
                     />
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleSendVerification}
-                    className="bg-slate-800 hover:bg-slate-700 text-amber-400 px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-700 transition shrink-0"
-                  >
-                    {otpSent ? 'Resend Code' : 'Send Code'}
-                  </button>
+                  {authMode === 'register' && (
+                    <button
+                      type="button"
+                      disabled={isSendingOtp || isVerified}
+                      onClick={handleSendVerification}
+                      className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-amber-400 px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-700 transition shrink-0 flex items-center gap-1.5"
+                    >
+                      {isSendingOtp ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Sending...
+                        </>
+                      ) : isVerified ? (
+                        'Verified'
+                      ) : otpSent ? (
+                        'Resend Code'
+                      ) : (
+                        'Send Code'
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* OTP Verification Field */}
-            {otpSent && (
+            {/* OTP Verification Field (Registration only) */}
+            {authMode === 'register' && otpSent && (
               <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800 space-y-2">
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-slate-400">
-                    Enter Verification Code sent to {verificationMethod === 'phone' ? phone : email}:
+                    Enter OTP sent to {verificationMethod === 'phone' ? phone : email}:
                   </span>
                   {isVerified && (
                     <span className="text-emerald-400 font-bold flex items-center gap-1 text-[11px]">
@@ -556,23 +944,41 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                 <div className="flex gap-2">
                   <input
                     type="text"
+                    inputMode="numeric"
                     maxLength={6}
+                    disabled={isVerified}
                     value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value)}
-                    placeholder="Enter code"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-200 tracking-widest text-center font-mono focus:outline-none focus:border-amber-400"
+                    onChange={(e) => {
+                      setOtpCode(e.target.value);
+                      if (errorMessage) setErrorMessage('');
+                    }}
+                    placeholder="Enter OTP code"
+                    className="w-full bg-slate-900 border border-slate-800 disabled:opacity-60 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-200 tracking-widest text-center font-mono focus:outline-none focus:border-amber-400"
                   />
                   {!isVerified && (
                     <button
                       type="button"
+                      disabled={isVerifyingOtp}
                       onClick={handleVerifyCode}
-                      className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl transition shrink-0"
+                      className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl transition shrink-0 flex items-center gap-1.5"
                     >
-                      Confirm
+                      {isVerifyingOtp ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Verifying...
+                        </>
+                      ) : (
+                        'Confirm'
+                      )}
                     </button>
                   )}
                 </div>
               </div>
+            )}
+
+            {authMode === 'register' && otpConfig.loaded && !otpConfig.configured && (
+              <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
+                MSG91 OTP widget credentials are not yet active on the server (`MSG91_WIDGET_ID` and `MSG91_TOKEN_AUTH`).
+              </p>
             )}
           </div>
 
@@ -697,13 +1103,15 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-950/70 border border-slate-800 text-[11px]">
               <Database className="w-3.5 h-3.5 text-slate-400" />
               <span className="text-slate-400">Database:</span>
-              <span className={`inline-block w-2 h-2 rounded-full ${dbInfo.connected ? 'bg-emerald-400 animate-pulse' : dbInfo.checked ? 'bg-rose-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span className={dbInfo.connected ? 'text-emerald-300 font-semibold' : dbInfo.checked ? 'text-rose-300 font-medium' : 'text-amber-300 font-medium'}>
+              <span className={`inline-block w-2 h-2 rounded-full ${dbInfo.connected ? 'bg-emerald-400 animate-pulse' : dbInfo.mode === 'in-memory' ? 'bg-amber-400' : dbInfo.checked ? 'bg-rose-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span className={dbInfo.connected ? 'text-emerald-300 font-semibold' : dbInfo.mode === 'in-memory' ? 'text-amber-300 font-semibold' : dbInfo.checked ? 'text-rose-300 font-medium' : 'text-amber-300 font-medium'}>
                 {dbInfo.connected
                   ? `MongoDB Atlas Connected (${dbInfo.database})`
-                  : dbInfo.checked
-                    ? 'Atlas Reconnecting...'
-                    : 'Connecting to Atlas...'}
+                  : dbInfo.mode === 'in-memory'
+                    ? `In-Memory Store Active (${dbInfo.database})`
+                    : dbInfo.checked
+                      ? 'Atlas Reconnecting...'
+                      : 'Connecting to Atlas...'}
               </span>
             </div>
           </div>

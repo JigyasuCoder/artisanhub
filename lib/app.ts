@@ -13,9 +13,34 @@ mongoose.set('bufferCommands', false);
 
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_artisanhub_key_123!';
-const DEFAULT_MONGO_URI =
-  'mongodb+srv://aprameyapnk1_db_user:vMnImo2531T7fJbX@cluster0.foxp3dd.mongodb.net/artisanhub?retryWrites=true&w=majority';
-const MONGO_URI = (process.env.MONGO_URI || DEFAULT_MONGO_URI).trim();
+const MONGO_URI = (process.env.MONGO_URI || '').trim();
+
+function cleanEnvVal(val?: string): string {
+  return (val || '').trim().replace(/^(['"])(.*)\1$/, '$2').trim();
+}
+
+function getMsg91Config() {
+  const widgetId = cleanEnvVal(
+    process.env.MSG91_WIDGET_ID ||
+      process.env.VITE_MSG91_WIDGET_ID ||
+      process.env.OTP_WIDGET_ID ||
+      process.env.WIDGET_ID
+  );
+  const tokenAuth = cleanEnvVal(
+    process.env.MSG91_TOKEN_AUTH ||
+      process.env.VITE_MSG91_TOKEN_AUTH ||
+      process.env.MSG91_AUTH_TOKEN ||
+      process.env.TOKEN_AUTH ||
+      process.env.MSG91_TOKEN
+  );
+  const authkey = cleanEnvVal(
+    process.env.MSG91_AUTHKEY ||
+      process.env.MSG91_AUTH_KEY ||
+      process.env.MSG91_API_KEY ||
+      process.env.AUTHKEY
+  );
+  return { widgetId, tokenAuth, authkey };
+}
 
 app.use(cors());
 app.use(express.json());
@@ -211,15 +236,21 @@ function resolveDatabaseName(): string {
   if (!raw || raw.includes('://') || /[/\\.\s"$*<>:|?@]/.test(raw)) {
     return 'artisanhub';
   }
-  return raw;
+  return raw.toLowerCase();
 }
 
-const DB_NAME = resolveDatabaseName();
+let activeDbName = resolveDatabaseName();
 
 const globalForMongo = globalThis as typeof globalThis & {
   __mongoConnectPromise?: Promise<typeof mongoose> | null;
   __mongoSeeded?: boolean;
 };
+
+function extractExistingDbCase(err: any): string | null {
+  const msg = String(err?.message || err?.errmsg || '');
+  const match = msg.match(/already have:\s*\[([^\]]+)\]/i);
+  return match?.[1]?.trim() || null;
+}
 
 async function seedIfEmpty() {
   if (globalForMongo.__mongoSeeded || mongoose.connection.readyState !== 1) return;
@@ -237,8 +268,17 @@ async function seedIfEmpty() {
       await Auction.insertMany(SEED_AUCTIONS);
     }
     globalForMongo.__mongoSeeded = true;
-  } catch (e) {
-    console.warn('Seed check error:', e);
+  } catch (e: any) {
+    const existingDb = extractExistingDbCase(e);
+    if (existingDb && existingDb !== activeDbName) {
+      console.warn(`Switching MongoDB database casing from "${activeDbName}" to "${existingDb}"`);
+      activeDbName = existingDb;
+      globalForMongo.__mongoConnectPromise = null;
+      await mongoose.disconnect().catch(() => {});
+      await ensureMongoReady();
+      return;
+    }
+    console.warn('Seed check error:', e?.message || e);
   }
 }
 
@@ -254,11 +294,31 @@ export async function ensureMongoReady(): Promise<boolean> {
   if (!globalForMongo.__mongoConnectPromise) {
     globalForMongo.__mongoConnectPromise = mongoose
       .connect(MONGO_URI, {
-        dbName: DB_NAME,
+        dbName: activeDbName,
         serverSelectionTimeoutMS: 8000,
         connectTimeoutMS: 8000
       })
       .then(async (conn) => {
+        try {
+          const admin = conn.connection.db?.admin();
+          if (admin) {
+            const { databases } = await admin.listDatabases();
+            const matched = databases?.find(
+              (d: any) => typeof d?.name === 'string' && d.name.toLowerCase() === activeDbName.toLowerCase()
+            );
+            if (matched && matched.name !== activeDbName) {
+              activeDbName = matched.name;
+              await mongoose.disconnect().catch(() => {});
+              return await mongoose.connect(MONGO_URI, {
+                dbName: activeDbName,
+                serverSelectionTimeoutMS: 8000,
+                connectTimeoutMS: 8000
+              });
+            }
+          }
+        } catch {
+          // listDatabases may not be permitted on restricted Atlas roles; continue with activeDbName
+        }
         console.log(`✅ Connected to MongoDB Atlas (Database: ${mongoose.connection.name})`);
         await seedIfEmpty();
         return conn;
@@ -307,8 +367,8 @@ app.get('/api/db-status', async (_req: Request, res: Response) => {
     database: mongoReady
       ? mongoose.connection.name && !mongoose.connection.name.includes('://')
         ? mongoose.connection.name
-        : DB_NAME
-      : `${DB_NAME} (in-memory)`,
+        : activeDbName
+      : `${activeDbName} (in-memory)`,
     host: mongoReady ? mongoose.connection.host || 'MongoDB Atlas' : 'local-memory',
     userCount,
     artCount,
@@ -317,11 +377,302 @@ app.get('/api/db-status', async (_req: Request, res: Response) => {
   });
 });
 
-// ==================== AUTH ROUTES ====================
+// ==================== OTP & AUTH ROUTES ====================
+
+app.get('/api/otp/config', (_req: Request, res: Response) => {
+  const { widgetId, tokenAuth, authkey } = getMsg91Config();
+  return res.json({
+    configured: Boolean(widgetId && tokenAuth),
+    widgetId,
+    tokenAuth,
+    hasAuthKey: Boolean(authkey)
+  });
+});
+
+function extractVerifiedIdentifier(data: any): string {
+  const rawMsg = data?.message;
+  const nestedId =
+    data?.data?.mobile ||
+    data?.data?.email ||
+    data?.data?.identifier ||
+    data?.mobile ||
+    data?.email ||
+    data?.identifier ||
+    (typeof rawMsg === 'object' && rawMsg !== null
+      ? rawMsg.mobile || rawMsg.email || rawMsg.identifier
+      : '');
+  const msgString =
+    typeof rawMsg === 'string' && !/^(otp|access token)?\s*verified(\s+successfully)?$/i.test(rawMsg.trim())
+      ? rawMsg.trim()
+      : '';
+  return String(nestedId || msgString || '').trim();
+}
+
+async function verifyAccessTokenWithMsg91(
+  accessToken: string,
+  config: { widgetId: string; tokenAuth: string; authkey: string }
+): Promise<
+  | { ok: true; verifiedIdentifier: string }
+  | { ok: false; status: number; message: string; code: string }
+> {
+  const { widgetId, tokenAuth, authkey } = config;
+  const attempts: Array<{ url: string; headers: Record<string, string>; body: Record<string, string> }> = authkey
+    ? [
+        {
+          url: 'https://api.msg91.com/api/v5/widget/verifyAccessToken',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json', authkey },
+          body: { 'access-token': accessToken }
+        },
+        {
+          url: 'https://control.msg91.com/api/v5/widget/verifyAccessToken',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json', authkey },
+          body: { authkey, 'access-token': accessToken }
+        }
+      ]
+    : [
+        {
+          url: 'https://api.msg91.com/api/v5/widget/verifyAccessToken',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: { widgetId, tokenAuth, 'access-token': accessToken }
+        }
+      ];
+
+  let lastStatus = 401;
+  let lastData: any = {};
+
+  for (const attempt of attempts) {
+    const res = await fetch(attempt.url, {
+      method: 'POST',
+      headers: attempt.headers,
+      body: JSON.stringify(attempt.body)
+    });
+    const data: any = await res.json().catch(() => ({}));
+    lastStatus = res.status;
+    lastData = data;
+    if (res.ok && data?.type === 'success' && data?.message) {
+      const verifiedIdentifier = extractVerifiedIdentifier(data);
+      if (verifiedIdentifier) {
+        return { ok: true, verifiedIdentifier };
+      }
+    }
+  }
+
+  console.warn('MSG91 verifyAccessToken failed:', lastStatus, lastData);
+  const rawErr =
+    (typeof lastData?.message === 'string' && lastData.message) ||
+    lastData?.error ||
+    `MSG91 OTP token verification failed (HTTP ${lastStatus}).`;
+  return {
+    ok: false,
+    status: lastStatus,
+    message: rawErr,
+    code: String(lastData?.code || '').trim()
+  };
+}
+
+app.post('/api/auth/verify-otp-code', async (req: Request, res: Response) => {
+  try {
+    const otp = String(req.body?.otp || '').trim();
+    const reqId = String(req.body?.reqId || '').trim();
+    const expectedIdentifier = String(req.body?.identifier || '').trim();
+
+    if (!otp || !reqId) {
+      return res.status(400).json({ message: 'OTP code and MSG91 request ID are required.' });
+    }
+    if (!expectedIdentifier) {
+      return res.status(400).json({ message: 'Phone number or email identifier is required.' });
+    }
+
+    const config = getMsg91Config();
+    if (!config.widgetId || !config.tokenAuth) {
+      return res.status(503).json({
+        message: 'MSG91_WIDGET_ID and MSG91_TOKEN_AUTH are not configured on the server.'
+      });
+    }
+
+    // Verify the OTP directly from backend against MSG91 Widget API using widgetId + tokenAuth
+    const verifyRes = await fetch('https://api.msg91.com/api/v5/widget/verifyOtp', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        tokenAuth: config.tokenAuth
+      },
+      body: JSON.stringify({
+        tokenAuth: config.tokenAuth,
+        widgetId: config.widgetId,
+        otp,
+        reqId
+      })
+    });
+
+    const data: any = await verifyRes.json().catch(() => ({}));
+    const isSuccess =
+      verifyRes.ok &&
+      (data?.type === 'success' || /otp verified successfully/i.test(String(data?.message || '')));
+
+    if (!isSuccess) {
+      const errMsg =
+        (typeof data?.message === 'string' && data.message) ||
+        data?.error ||
+        (Array.isArray(data?.errors) ? data.errors[0]?.message || data.errors[0] : '') ||
+        'Invalid or expired OTP. Please check the code and try again.';
+      return res.status(401).json({ message: errMsg });
+    }
+
+    const rawJwt =
+      data?.['access-token'] ||
+      data?.accessToken ||
+      data?.token ||
+      (typeof data?.message === 'string' && data.message.trim().split('.').length === 3
+        ? data.message.trim()
+        : '');
+
+    let verifiedIdentifier = '';
+
+    // If authkey is also configured and passes, use MSG91 verifyAccessToken as an extra check
+    if (rawJwt && config.authkey) {
+      const tokenCheck = await verifyAccessTokenWithMsg91(rawJwt, config);
+      if (tokenCheck.ok) {
+        verifiedIdentifier = tokenCheck.verifiedIdentifier;
+      }
+    }
+
+    // Check any identifier claims inside the JWT returned directly from api.msg91.com over TLS
+    if (!verifiedIdentifier && rawJwt) {
+      const decodedPayload = jwt.decode(rawJwt) as Record<string, any> | null;
+      const claimId = String(
+        decodedPayload?.mobile ||
+          decodedPayload?.phone ||
+          decodedPayload?.mobileNumber ||
+          decodedPayload?.email ||
+          decodedPayload?.identifier ||
+          ''
+      ).trim();
+      if (claimId) {
+        verifiedIdentifier = claimId;
+      }
+    }
+
+    if (verifiedIdentifier) {
+      const isEmail = expectedIdentifier.includes('@');
+      const matches = isEmail
+        ? normalizeEmail(verifiedIdentifier) === normalizeEmail(expectedIdentifier)
+        : phoneMatches(verifiedIdentifier, expectedIdentifier);
+      if (!matches) {
+        return res.status(403).json({
+          message: 'Verified OTP identifier does not match the submitted phone number or email.'
+        });
+      }
+    } else {
+      verifiedIdentifier = expectedIdentifier;
+    }
+
+    const otpVerificationToken = jwt.sign(
+      {
+        otpVerified: true,
+        identifier: verifiedIdentifier
+      },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+
+    return res.json({
+      verified: true,
+      identifier: verifiedIdentifier,
+      otpVerificationToken
+    });
+  } catch (err: any) {
+    console.error('MSG91 verifyOtp error:', err);
+    return res.status(500).json({ message: err?.message || 'Failed to verify OTP with MSG91.' });
+  }
+});
+
+app.post('/api/auth/verify-otp-token', async (req: Request, res: Response) => {
+  try {
+    const accessToken = (req.body?.accessToken || req.body?.['access-token'] || '').trim();
+    const expectedIdentifier = (req.body?.identifier || '').trim();
+
+    if (!accessToken) {
+      return res.status(400).json({ message: 'MSG91 access token is required.' });
+    }
+
+    const config = getMsg91Config();
+    if (!config.authkey && (!config.widgetId || !config.tokenAuth)) {
+      return res.status(503).json({
+        message: 'MSG91 credentials (MSG91_AUTHKEY or MSG91_WIDGET_ID/MSG91_TOKEN_AUTH) are not configured on the server.'
+      });
+    }
+
+    const result = await verifyAccessTokenWithMsg91(accessToken, config);
+    if (!result.ok) {
+      if (!config.authkey && /auth|201|401/i.test(`${result.message} ${result.code}`)) {
+        return res.status(503).json({
+          message:
+            'Server is missing MSG91_AUTHKEY in Secrets. MSG91 requires your account Authkey (MSG91 Dashboard → Authkey) to verify OTP tokens on the backend.'
+        });
+      }
+
+      if (config.authkey && config.tokenAuth && config.authkey === config.tokenAuth) {
+        return res.status(401).json({
+          message:
+            'MSG91_AUTHKEY in Secrets is set to the same value as MSG91_TOKEN_AUTH. Replace MSG91_AUTHKEY with your account Authkey from MSG91 Dashboard → Authkey.'
+        });
+      }
+
+      if (result.code === '207') {
+        return res.status(401).json({
+          message:
+            'MSG91 error 207 (Invalid authentication key): verify MSG91_AUTHKEY in Secrets matches an active Authkey from MSG91 Dashboard → Authkey (not your widget tokenAuth), with Admin/Owner rule and IP Security off.'
+        });
+      }
+
+      if (config.authkey && /auth|ip|whitelist|201|401|418/i.test(`${result.message} ${result.code}`)) {
+        return res.status(401).json({
+          message: `MSG91 verification failed (${result.message}). Verify MSG91_AUTHKEY in Secrets and disable IP Security/Whitelisting in MSG91 Dashboard → Authkey.`
+        });
+      }
+
+      return res.status(401).json({ message: result.message });
+    }
+
+    const verifiedIdentifier = result.verifiedIdentifier;
+
+    if (expectedIdentifier) {
+      const isEmail = expectedIdentifier.includes('@');
+      const matches = isEmail
+        ? normalizeEmail(verifiedIdentifier) === normalizeEmail(expectedIdentifier)
+        : phoneMatches(verifiedIdentifier, expectedIdentifier);
+      if (!matches) {
+        return res.status(403).json({
+          message: 'Verified OTP identifier does not match the submitted phone number or email.'
+        });
+      }
+    }
+
+    const otpVerificationToken = jwt.sign(
+      {
+        otpVerified: true,
+        identifier: verifiedIdentifier
+      },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+
+    return res.json({
+      verified: true,
+      identifier: verifiedIdentifier,
+      otpVerificationToken
+    });
+  } catch (err: any) {
+    console.error('MSG91 verifyAccessToken error:', err);
+    return res.status(500).json({ message: err?.message || 'Failed to verify OTP with MSG91.' });
+  }
+});
 
 app.post('/api/auth/register', async (req: Request, res: Response) => {
   try {
-    const { phone, email, password, role, name, location, bio } = req.body;
+    const { phone, email, password, role, name, location, bio, otpVerificationToken } = req.body;
 
     if (!password) {
       return res.status(400).json({ message: 'Password is required' });
@@ -333,6 +684,36 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     const normEmail = email ? normalizeEmail(email) : null;
     const cleanPh = phone ? phone.trim() : null;
     const targetRole = role || 'buyer';
+
+    if (!otpVerificationToken) {
+      return res.status(403).json({
+        message: 'OTP verification is required before creating an account.'
+      });
+    }
+
+    try {
+      const decoded = jwt.verify(otpVerificationToken, JWT_SECRET) as {
+        otpVerified?: boolean;
+        identifier?: string;
+      };
+      if (!decoded?.otpVerified || !decoded?.identifier) {
+        return res.status(403).json({ message: 'Invalid OTP verification proof.' });
+      }
+      const matchesSubmitted = cleanPh
+        ? phoneMatches(decoded.identifier, cleanPh)
+        : normEmail
+          ? normalizeEmail(decoded.identifier) === normEmail
+          : false;
+      if (!matchesSubmitted) {
+        return res.status(403).json({
+          message: 'Verified phone/email does not match registration details. Please re-verify OTP.'
+        });
+      }
+    } catch {
+      return res.status(403).json({
+        message: 'OTP verification expired or invalid. Please verify your OTP again.'
+      });
+    }
 
     const ready = await ensureMongoReady();
     if (!ready) {
@@ -589,8 +970,8 @@ app.get('/api/artworks', async (_req: Request, res: Response) => {
     }));
     return res.json(mapped);
   } catch (err: any) {
-    console.error('Fetch artworks error:', err);
-    return res.status(500).json({ message: 'Failed to retrieve artworks from database' });
+    console.warn('Fetch artworks fallback to in-memory:', err?.message || err);
+    return res.json(memStore.artworks);
   }
 });
 
@@ -700,8 +1081,8 @@ app.get('/api/custom-requests', async (_req: Request, res: Response) => {
     }));
     return res.json(mapped);
   } catch (err: any) {
-    console.error('Fetch custom requests error:', err);
-    return res.status(500).json({ message: 'Failed to retrieve custom requests' });
+    console.warn('Fetch custom requests fallback to in-memory:', err?.message || err);
+    return res.json(memStore.requests);
   }
 });
 
@@ -836,8 +1217,8 @@ app.get('/api/auctions', async (_req: Request, res: Response) => {
       }))
     );
   } catch (err: any) {
-    console.error('Fetch auctions error:', err);
-    return res.status(500).json({ message: 'Failed to retrieve auctions' });
+    console.warn('Fetch auctions fallback to in-memory:', err?.message || err);
+    return res.json(memStore.auctions);
   }
 });
 

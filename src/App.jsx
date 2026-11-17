@@ -315,7 +315,7 @@ export default function App() {
   const [isSubmittingArt, setIsSubmittingArt] = useState(false);
 
   // Database Connection Info
-  const [dbStatus, setDbStatus] = useState({ connected: false, database: 'artisanhub', checked: false });
+  const [dbStatus, setDbStatus] = useState({ connected: false, mode: 'connecting', database: 'artisanhub', checked: false });
 
   // Toast Notifications
   const [toastMessage, setToastMessage] = useState(null);
@@ -383,6 +383,7 @@ export default function App() {
         const isConnected = !!data.connected;
         setDbStatus({
           connected: isConnected,
+          mode: data.mode || (isConnected ? 'mongodb' : 'in-memory'),
           database: data.database || 'artisanhub',
           checked: true
         });
@@ -390,10 +391,10 @@ export default function App() {
           fetchMarketplaceData();
         }
       })
-      .catch(() => setDbStatus({ connected: false, database: 'offline', checked: true }));
+      .catch(() => setDbStatus({ connected: false, mode: 'offline', database: 'offline', checked: true }));
   };
 
-  // Fetch initial data and poll db-status until MongoDB Atlas is connected
+  // Fetch initial data and poll db-status until MongoDB Atlas or in-memory store is ready
   useEffect(() => {
     let isMounted = true;
     let timerId;
@@ -404,20 +405,22 @@ export default function App() {
         .then(data => {
           if (!isMounted) return;
           const isConnected = !!data.connected;
+          const isInMemory = data.mode === 'in-memory';
           setDbStatus({
             connected: isConnected,
+            mode: data.mode || (isConnected ? 'mongodb' : 'in-memory'),
             database: data.database || 'artisanhub',
             checked: true
           });
           if (isConnected) {
             fetchMarketplaceData();
-          } else {
+          } else if (!isInMemory) {
             timerId = setTimeout(pollStatus, 3000);
           }
         })
         .catch(() => {
           if (!isMounted) return;
-          setDbStatus({ connected: false, database: 'offline', checked: true });
+          setDbStatus({ connected: false, mode: 'offline', database: 'offline', checked: true });
           timerId = setTimeout(pollStatus, 3000);
         });
     };
@@ -945,7 +948,11 @@ export default function App() {
               <Database className="w-3 h-3 text-slate-400" />
               <span className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
               <span className={dbStatus.connected ? 'text-emerald-300 font-semibold' : 'text-amber-300'}>
-                {dbStatus.connected ? `MongoDB Atlas: ${dbStatus.database}` : 'Connecting DB...'}
+                {dbStatus.connected
+                  ? `MongoDB Atlas: ${dbStatus.database}`
+                  : dbStatus.mode === 'in-memory'
+                    ? 'In-Memory Mode'
+                    : 'Connecting DB...'}
               </span>
             </div>
           </div>

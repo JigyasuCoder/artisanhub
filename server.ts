@@ -8,13 +8,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 
-// Keep persistent Atlas connection alive in long-lived server mode
-ensureMongoReady().catch(() => {});
-setInterval(() => {
-  if (mongoose.connection.readyState === 0) {
-    ensureMongoReady().catch(() => {});
-  }
-}, 5000);
+// Keep persistent Atlas connection alive only when MONGO_URI is configured
+if (process.env.MONGO_URI) {
+  ensureMongoReady().catch(() => {});
+  setInterval(() => {
+    if (mongoose.connection.readyState === 0) {
+      ensureMongoReady().catch(() => {});
+    }
+  }, 5000);
+}
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
