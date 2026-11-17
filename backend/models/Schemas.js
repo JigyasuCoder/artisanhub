@@ -9,7 +9,6 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   location: { type: String, default: 'Bengaluru Local' },
   bio: { type: String, default: '' },
-  specialization: { type: String, default: 'Fine Arts' },
   isVerified: { type: Boolean, default: true }
 }, { timestamps: true });
 
