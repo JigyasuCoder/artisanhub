@@ -13,7 +13,9 @@ mongoose.set('bufferCommands', false);
 
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_artisanhub_key_123!';
-const MONGO_URI = (process.env.MONGO_URI || '').trim();
+const DEFAULT_MONGO_URI =
+  'mongodb+srv://aprameyapnk1_db_user:vMnImo2531T7fJbX@cluster0.foxp3dd.mongodb.net/artisanhub?retryWrites=true&w=majority';
+const MONGO_URI = (process.env.MONGO_URI || DEFAULT_MONGO_URI).trim();
 
 app.use(cors());
 app.use(express.json());
@@ -217,7 +219,6 @@ const DB_NAME = resolveDatabaseName();
 const globalForMongo = globalThis as typeof globalThis & {
   __mongoConnectPromise?: Promise<typeof mongoose> | null;
   __mongoSeeded?: boolean;
-  __mongoDisabled?: boolean;
 };
 
 async function seedIfEmpty() {
@@ -236,13 +237,13 @@ async function seedIfEmpty() {
       await Auction.insertMany(SEED_AUCTIONS);
     }
     globalForMongo.__mongoSeeded = true;
-  } catch {
-    // ignore seed errors
+  } catch (e) {
+    console.warn('Seed check error:', e);
   }
 }
 
 export async function ensureMongoReady(): Promise<boolean> {
-  if (!MONGO_URI || globalForMongo.__mongoDisabled) {
+  if (!MONGO_URI) {
     return false;
   }
 
@@ -254,19 +255,18 @@ export async function ensureMongoReady(): Promise<boolean> {
     globalForMongo.__mongoConnectPromise = mongoose
       .connect(MONGO_URI, {
         dbName: DB_NAME,
-        serverSelectionTimeoutMS: 2500,
-        connectTimeoutMS: 2500
+        serverSelectionTimeoutMS: 8000,
+        connectTimeoutMS: 8000
       })
       .then(async (conn) => {
-        console.log(`Connected to MongoDB (Database: ${mongoose.connection.name})`);
+        console.log(`✅ Connected to MongoDB Atlas (Database: ${mongoose.connection.name})`);
         await seedIfEmpty();
         return conn;
       })
-      .catch(() => {
-        globalForMongo.__mongoDisabled = true;
+      .catch((err) => {
         globalForMongo.__mongoConnectPromise = null;
-        console.log('ArtisanHub running with in-memory data store.');
-        throw new Error('MongoDB disabled');
+        console.error('❌ MongoDB Atlas connection error:', err?.message || err);
+        throw err;
       });
   }
 
@@ -302,14 +302,14 @@ app.get('/api/db-status', async (_req: Request, res: Response) => {
   }
 
   res.json({
-    connected: true,
+    connected: mongoReady,
     mode: mongoReady ? 'mongodb' : 'in-memory',
     database: mongoReady
       ? mongoose.connection.name && !mongoose.connection.name.includes('://')
         ? mongoose.connection.name
         : DB_NAME
       : `${DB_NAME} (in-memory)`,
-    host: mongoReady ? mongoose.connection.host || 'MongoDB' : 'local-memory',
+    host: mongoReady ? mongoose.connection.host || 'MongoDB Atlas' : 'local-memory',
     userCount,
     artCount,
     requestCount,
