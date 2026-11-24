@@ -358,14 +358,18 @@ export default function App() {
   const fetchMarketplaceData = () => {
     fetch(`${API_BASE_URL}/artworks`)
       .then((res) => {
-        if (!res.ok) throw new Error("API not available");
+        if (!res.ok) throw new Error(`API error (${res.status})`);
         return res.json();
       })
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          setProducts(data);
+          const normalized = data.map((art) => ({
+            ...art,
+            imageUrl: normalizeImageUrl(art.imageUrl)
+          }));
+          setProducts(normalized);
           try {
-            localStorage.setItem('artisanhub_products_cache', JSON.stringify(data));
+            localStorage.setItem('artisanhub_products_cache', JSON.stringify(normalized));
           } catch (e) {
             console.warn(e);
           }
@@ -375,7 +379,7 @@ export default function App() {
 
     fetch(`${API_BASE_URL}/custom-requests`)
       .then((res) => {
-        if (!res.ok) throw new Error("API not available");
+        if (!res.ok) throw new Error(`API error (${res.status})`);
         return res.json();
       })
       .then((data) => {
@@ -392,17 +396,24 @@ export default function App() {
 
     fetch(`${API_BASE_URL}/auctions`)
       .then((res) => {
-        if (!res.ok) throw new Error("API not available");
+        if (!res.ok) throw new Error(`API error (${res.status})`);
         return res.json();
       })
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) setAuctions(data);
+        if (Array.isArray(data) && data.length > 0) {
+          setAuctions(
+            data.map((auc) => ({
+              ...auc,
+              imageUrl: normalizeImageUrl(auc.imageUrl, DEFAULT_AUCTION_IMAGE)
+            }))
+          );
+        }
       })
       .catch(() => {});
   };
 
   // Check live MongoDB Atlas status
-  const checkDbStatus = () => {
+  const checkDbStatus = (refreshData = false) => {
     fetch(`${API_BASE_URL}/db-status`)
       .then(res => res.json())
       .then(data => {
@@ -413,7 +424,7 @@ export default function App() {
           database: data.database || 'artisanhub',
           checked: true
         });
-        if (isConnected) {
+        if (refreshData && isConnected) {
           fetchMarketplaceData();
         }
       })
@@ -463,13 +474,14 @@ export default function App() {
   // Extract distinct artists & categories for filter bar
   const artistsList = Array.from(new Set(products.map(p => p.artist))).filter(Boolean);
   const categoriesList = ['All', 'Oil Painting', 'Sculpture', 'Sketch', 'Digital Art', 'Ceramics', 'Textile Art'];
+  const maxAvailablePrice = Math.max(100000, ...products.map(p => Number(p.price || 0)));
 
   // Reset all filters
   const handleResetFilters = () => {
     setSearchQuery('');
     setSelectedCategory('All');
     setSelectedArtist('All');
-    setMaxPriceFilter(100000);
+    setMaxPriceFilter(maxAvailablePrice);
     setSortBy('default');
   };
 
@@ -608,7 +620,7 @@ export default function App() {
       
       const data = await res.json().catch(() => ({}));
 
-      if (res.ok && data) {
+      if (res.ok && data && (data.id || data._id)) {
         const savedArt = { ...data, imageUrl: normalizeImageUrl(data.imageUrl) };
         setProducts(prev => {
           const next = [savedArt, ...prev.filter(p => (p.id || p._id) !== (savedArt.id || savedArt._id))];
@@ -620,10 +632,24 @@ export default function App() {
           return next;
         });
 
+        // Ensure active gallery filters or tab don't hide the newly published piece
+        if (searchQuery) setSearchQuery('');
+        if (selectedCategory !== 'All' && selectedCategory !== savedArt.category) {
+          setSelectedCategory('All');
+        }
+        if (selectedArtist !== 'All' && selectedArtist !== savedArt.artist) {
+          setSelectedArtist('All');
+        }
+        if (Number(savedArt.price || 0) > maxPriceFilter) {
+          setMaxPriceFilter(Number(savedArt.price));
+        }
+
         setIsAddArtOpen(false);
+        setActiveTab('marketplace');
+        setIsAuthViewOpen(false);
         setNewArtForm({ title: '', category: 'Oil Painting', price: '', medium: '', dimensions: '', description: '', imageUrl: '' });
-        showNotification("Artwork published & now live across ArtisanHub!");
-        checkDbStatus();
+        showNotification("Artwork published & saved to MongoDB Atlas!");
+        checkDbStatus(false);
       } else {
         showNotification(`Could not save artwork to database: ${data.message || 'Server error'}`);
       }
@@ -1384,9 +1410,9 @@ export default function App() {
               setSelectedArtist={setSelectedArtist}
               artistsList={artistsList}
               categoriesList={categoriesList}
-              priceRange={maxPriceFilter}
+              priceRange={Math.min(maxPriceFilter, maxAvailablePrice)}
               setPriceRange={setMaxPriceFilter}
-              maxAvailablePrice={100000}
+              maxAvailablePrice={maxAvailablePrice}
               sortBy={sortBy}
               setSortBy={setSortBy}
               onResetFilters={handleResetFilters}

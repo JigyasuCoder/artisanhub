@@ -327,54 +327,66 @@ export async function ensureMongoReady(): Promise<boolean> {
     return true;
   }
 
-  if (!globalForMongo.__mongoConnectPromise) {
-    globalForMongo.__mongoConnectPromise = mongoose
-      .connect(MONGO_URI, {
-        dbName: activeDbName,
-        serverSelectionTimeoutMS: 8000,
-        connectTimeoutMS: 8000
-      })
-      .then(async (conn) => {
-        try {
-          const admin = conn.connection.db?.admin();
-          if (admin) {
-            const { databases } = await admin.listDatabases();
-            const matched = databases?.find(
-              (d: any) => typeof d?.name === 'string' && d.name.toLowerCase() === activeDbName.toLowerCase()
-            );
-            if (matched && matched.name !== activeDbName) {
-              activeDbName = matched.name;
-              await mongoose.disconnect().catch(() => {});
-              return await mongoose.connect(MONGO_URI, {
-                dbName: activeDbName,
-                serverSelectionTimeoutMS: 8000,
-                connectTimeoutMS: 8000
-              });
-            }
-          }
-        } catch {
-          // listDatabases may not be permitted on restricted Atlas roles; continue with activeDbName
-        }
-        console.log(`✅ Connected to MongoDB Atlas (Database: ${mongoose.connection.name})`);
-        await seedIfEmpty();
-        return conn;
-      })
-      .catch((err) => {
-        globalForMongo.__mongoConnectPromise = null;
-        console.error('❌ MongoDB Atlas connection error:', err?.message || err);
-        throw err;
-      });
+  // If connection dropped, closed, or is disconnecting, clear any stale cached promise
+  if (mongoose.connection.readyState !== 2) {
+    globalForMongo.__mongoConnectPromise = null;
+    if (mongoose.connection.readyState === 3) {
+      await mongoose.disconnect().catch(() => {});
+    }
   }
 
-  try {
-    await globalForMongo.__mongoConnectPromise;
-    return mongoose.connection.readyState === 1;
-  } catch {
-    return false;
+  const connectOnce = async (): Promise<boolean> => {
+    if (mongoose.connection.readyState === 1) return true;
+
+    if (!globalForMongo.__mongoConnectPromise) {
+      globalForMongo.__mongoConnectPromise = mongoose
+        .connect(MONGO_URI, {
+          dbName: activeDbName,
+          serverSelectionTimeoutMS: 10000,
+          connectTimeoutMS: 10000,
+          socketTimeoutMS: 45000,
+          maxPoolSize: 10
+        })
+        .then(async (conn) => {
+          console.log(`✅ Connected to MongoDB Atlas (Database: ${mongoose.connection.name})`);
+          await seedIfEmpty();
+          return conn;
+        })
+        .catch((err) => {
+          globalForMongo.__mongoConnectPromise = null;
+          console.error('❌ MongoDB Atlas connection error:', err?.message || err);
+          throw err;
+        });
+    }
+
+    try {
+      await globalForMongo.__mongoConnectPromise;
+      const connected = mongoose.connection.readyState === 1;
+      if (!connected) {
+        globalForMongo.__mongoConnectPromise = null;
+      }
+      return connected;
+    } catch {
+      globalForMongo.__mongoConnectPromise = null;
+      return false;
+    }
+  };
+
+  if (await connectOnce()) {
+    return true;
   }
+
+  // Retry once on transient serverless cold-start or Atlas handshake failure
+  return connectOnce();
 }
 
 mongoose.connection.on('disconnected', () => {
+  globalForMongo.__mongoConnectPromise = null;
+});
+mongoose.connection.on('close', () => {
+  globalForMongo.__mongoConnectPromise = null;
+});
+mongoose.connection.on('error', () => {
   globalForMongo.__mongoConnectPromise = null;
 });
 
@@ -753,6 +765,11 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
 
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({
+          message: 'MongoDB Atlas is temporarily unavailable. Please retry in a moment.'
+        });
+      }
       const existing = memStore.users.find(
         (u) =>
           u.role === targetRole &&
@@ -888,6 +905,11 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({
+          message: 'MongoDB Atlas is temporarily unavailable. Please retry in a moment.'
+        });
+      }
       const user = memStore.users.find(
         (u) =>
           (!role || u.role === role) &&
@@ -979,6 +1001,11 @@ app.get('/api/artworks', async (_req: Request, res: Response) => {
   try {
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({
+          message: 'MongoDB Atlas is temporarily unavailable. Please try again.'
+        });
+      }
       return res.json(memStore.artworks);
     }
 
@@ -1006,6 +1033,12 @@ app.get('/api/artworks', async (_req: Request, res: Response) => {
     }));
     return res.json(mapped);
   } catch (err: any) {
+    if (MONGO_URI) {
+      console.error('Fetch artworks MongoDB error:', err?.message || err);
+      return res.status(503).json({
+        message: 'Failed to load artworks from MongoDB Atlas. Please retry.'
+      });
+    }
     console.warn('Fetch artworks fallback to in-memory:', err?.message || err);
     return res.json(memStore.artworks);
   }
@@ -1035,6 +1068,11 @@ app.post('/api/artworks', async (req: Request, res: Response) => {
 
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({
+          message: 'MongoDB Atlas is temporarily unavailable. Your artwork was not saved—please try publishing again.'
+        });
+      }
       const id = `art-${Date.now()}`;
       const newArt = {
         id,
@@ -1064,6 +1102,9 @@ app.patch('/api/artworks/:id/like', async (req: Request, res: Response) => {
     const delta = req.body?.liked ? 1 : -1;
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
       const art = memStore.artworks.find((a) => a.id === req.params.id || a._id === req.params.id);
       if (!art) return res.status(404).json({ message: 'Artwork not found' });
       art.likes = Math.max(0, (art.likes || 0) + delta);
@@ -1092,6 +1133,9 @@ app.get('/api/custom-requests', async (_req: Request, res: Response) => {
   try {
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
       return res.json(memStore.requests);
     }
 
@@ -1118,6 +1162,10 @@ app.get('/api/custom-requests', async (_req: Request, res: Response) => {
     }));
     return res.json(mapped);
   } catch (err: any) {
+    if (MONGO_URI) {
+      console.error('Fetch custom requests MongoDB error:', err?.message || err);
+      return res.status(503).json({ message: 'Failed to load custom requests from MongoDB Atlas.' });
+    }
     console.warn('Fetch custom requests fallback to in-memory:', err?.message || err);
     return res.json(memStore.requests);
   }
@@ -1133,6 +1181,9 @@ app.post('/api/custom-requests', async (req: Request, res: Response) => {
 
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
       const id = `req-${Date.now()}`;
       const created = {
         id,
@@ -1174,6 +1225,9 @@ app.post('/api/bids', async (req: Request, res: Response) => {
 
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
       const target = memStore.requests.find((r) => r.id === requestId || r._id === requestId);
       if (!target) return res.status(404).json({ message: 'Custom request not found' });
       target.bids = [bidObj, ...(target.bids || [])];
@@ -1201,6 +1255,9 @@ app.patch('/api/custom-requests/:reqId/bids/:bidId/accept', async (req: Request,
     const { reqId, bidId } = req.params;
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
       const customReq = memStore.requests.find((r) => r.id === reqId || r._id === reqId);
       if (!customReq) return res.status(404).json({ message: 'Request not found' });
       customReq.status = 'in-progress';
@@ -1237,6 +1294,9 @@ app.get('/api/auctions', async (_req: Request, res: Response) => {
   try {
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
       return res.json(memStore.auctions);
     }
 
@@ -1261,6 +1321,10 @@ app.get('/api/auctions', async (_req: Request, res: Response) => {
       }))
     );
   } catch (err: any) {
+    if (MONGO_URI) {
+      console.error('Fetch auctions MongoDB error:', err?.message || err);
+      return res.status(503).json({ message: 'Failed to load auctions from MongoDB Atlas.' });
+    }
     console.warn('Fetch auctions fallback to in-memory:', err?.message || err);
     return res.json(memStore.auctions);
   }
@@ -1271,6 +1335,9 @@ app.post('/api/auctions/:id/bid', async (req: Request, res: Response) => {
     const { amount } = req.body;
     const ready = await ensureMongoReady();
     if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
       const auction = memStore.auctions.find((a) => a.id === req.params.id || a._id === req.params.id);
       if (!auction) return res.status(404).json({ message: 'Auction not found' });
       if (Number(amount) <= (auction.currentBid || 0)) {
