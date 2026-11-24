@@ -338,6 +338,7 @@ export default function App() {
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [isSubmittingArt, setIsSubmittingArt] = useState(false);
+  const [isSubmittingReq, setIsSubmittingReq] = useState(false);
   const [bioDraft, setBioDraft] = useState(() => currentUser?.bio || '');
 
   // Database Connection Info
@@ -353,6 +354,14 @@ export default function App() {
 
   // Helper function to format prices in INR (₹)
   const formatPrice = (price) => `₹${Number(price).toLocaleString('en-IN')}`;
+  const formatPostedDate = (val) => {
+    if (!val) return 'Recent';
+    const d = new Date(val);
+    if (!Number.isNaN(d.getTime()) && String(val).includes('T')) {
+      return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    return String(val);
+  };
 
   // Fetch latest catalog, requests, and auctions directly from MongoDB Atlas
   const fetchMarketplaceData = () => {
@@ -665,23 +674,21 @@ export default function App() {
     e.preventDefault();
     const minBudget = Number(newReqForm.budgetMin);
     const maxBudget = Number(newReqForm.budgetMax);
-    if (minBudget <= 0 || maxBudget < minBudget) {
-      showNotification('Max budget must be greater than or equal to Min budget.');
+    if (!Number.isFinite(minBudget) || minBudget <= 0 || !Number.isFinite(maxBudget) || maxBudget < minBudget) {
+      showNotification('Please enter positive budgets where Max budget >= Min budget.');
       return;
     }
 
+    setIsSubmittingReq(true);
     const reqData = {
-      buyerName: currentUser.name || 'Art Patron',
-      title: newReqForm.title,
+      buyerName: (currentUser.name || 'Art Patron').trim(),
+      title: newReqForm.title.trim(),
       category: newReqForm.category,
       budgetMin: minBudget,
       budgetMax: maxBudget,
       deadline: newReqForm.deadline,
-      description: newReqForm.description,
-      location: currentUser.location || 'Bengaluru Local',
-      status: 'open',
-      createdAt: 'Just now',
-      bids: []
+      description: newReqForm.description ? newReqForm.description.trim() : '',
+      location: (currentUser.location || 'Bengaluru Local').trim()
     };
 
     try {
@@ -698,7 +705,7 @@ export default function App() {
       }
 
       setBuyerRequests(prev => {
-        const updated = [data, ...prev];
+        const updated = [data, ...prev.filter(r => (r.id || r._id) !== (data.id || data._id))];
         try {
           localStorage.setItem('artisanhub_requests_cache', JSON.stringify(updated));
         } catch (err) {
@@ -708,10 +715,14 @@ export default function App() {
       });
 
       setIsCreateRequestOpen(false);
+      setActiveTab('demands');
+      setIsAuthViewOpen(false);
       setNewReqForm({ title: '', category: 'Modern Art', budgetMin: '', budgetMax: '', deadline: '', description: '' });
       showNotification("Custom demand posted to MongoDB Atlas! Local artists notified.");
     } catch (err) {
       showNotification(`Database network error: ${err.message || 'Failed to reach server'}`);
+    } finally {
+      setIsSubmittingReq(false);
     }
   };
 
@@ -951,7 +962,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-amber-400 selection:text-slate-950 flex flex-col justify-between">
         {toastMessage && (
-          <div className="fixed top-5 right-5 z-50 bg-amber-400 text-slate-950 px-5 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-2.5 animate-bounce border border-amber-300">
+          <div className="fixed top-5 right-5 z-[100] bg-amber-400 text-slate-950 px-5 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-2.5 animate-bounce border border-amber-300">
             <Sparkles className="w-4 h-4 shrink-0 text-slate-950" />
             <span className="text-xs sm:text-sm">{toastMessage}</span>
           </div>
@@ -1001,7 +1012,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-amber-400 selection:text-slate-950 pb-20">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 bg-amber-400 text-slate-950 px-5 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-2.5 animate-bounce border border-amber-300">
+        <div className="fixed top-5 right-5 z-[100] bg-amber-400 text-slate-950 px-5 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-2.5 animate-bounce border border-amber-300">
           <Sparkles className="w-4 h-4 shrink-0 text-slate-950" />
           <span className="text-xs sm:text-sm">{toastMessage}</span>
         </div>
@@ -1509,7 +1520,7 @@ export default function App() {
                           <span>·</span>
                           <MapPin className="w-3.5 h-3.5 text-amber-400" /> {req.location}
                           <span>·</span>
-                          <span className="text-slate-500">{req.createdAt || 'Recent'}</span>
+                          <span className="text-slate-500">{formatPostedDate(req.createdAt)}</span>
                         </p>
                       </div>
 
@@ -2253,13 +2264,13 @@ export default function App() {
       {/* ================= MODAL: POST CUSTOM DEMAND (BUYER) ================= */}
       {isCreateRequestOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-lg space-y-5 shadow-2xl">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-5 shadow-2xl">
             <div className="flex justify-between items-center">
               <div>
                 <h3 className="text-lg font-bold text-slate-100">Post Custom Art Demand</h3>
                 <p className="text-xs text-slate-400">Describe what you need and receive price quotes from local artists</p>
               </div>
-              <button onClick={() => setIsCreateRequestOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button type="button" onClick={() => setIsCreateRequestOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
             <form onSubmit={handleCreateRequestSubmit} className="space-y-4">
@@ -2280,6 +2291,7 @@ export default function App() {
                   <label className="text-xs text-slate-400 font-semibold block mb-1">Min Budget (₹) *</label>
                   <input 
                     required 
+                    min={1}
                     type="number" 
                     placeholder="e.g. 5000" 
                     value={newReqForm.budgetMin} 
@@ -2291,6 +2303,7 @@ export default function App() {
                   <label className="text-xs text-slate-400 font-semibold block mb-1">Max Budget (₹) *</label>
                   <input 
                     required 
+                    min={1}
                     type="number" 
                     placeholder="e.g. 15000" 
                     value={newReqForm.budgetMax} 
@@ -2349,9 +2362,17 @@ export default function App() {
                 </button>
                 <button 
                   type="submit" 
-                  className="flex-1 bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-amber-400/20"
+                  disabled={isSubmittingReq}
+                  className="flex-1 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
                 >
-                  Broadcast Requirement
+                  {isSubmittingReq ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      Saving to MongoDB...
+                    </>
+                  ) : (
+                    'Broadcast Requirement'
+                  )}
                 </button>
               </div>
             </form>

@@ -1173,8 +1173,36 @@ app.get('/api/custom-requests', async (_req: Request, res: Response) => {
 
 app.post('/api/custom-requests', async (req: Request, res: Response) => {
   try {
+    const {
+      buyerName,
+      title,
+      category,
+      budgetMin,
+      budgetMax,
+      deadline,
+      description,
+      location
+    } = req.body || {};
+
+    const cleanTitle = String(title || '').trim();
+    const minBudget = Number(budgetMin);
+    const maxBudget = Number(budgetMax);
+
+    if (!cleanTitle || !Number.isFinite(minBudget) || minBudget <= 0 || !Number.isFinite(maxBudget) || maxBudget < minBudget) {
+      return res.status(400).json({
+        message: 'Valid requirement title and positive min/max budget are required'
+      });
+    }
+
     const payload = {
-      ...req.body,
+      buyerName: String(buyerName || 'Art Patron').trim(),
+      title: cleanTitle,
+      category: String(category || 'Modern Art').trim(),
+      budgetMin: minBudget,
+      budgetMax: maxBudget,
+      deadline: deadline ? String(deadline).trim() : '',
+      description: description ? String(description).trim() : '',
+      location: String(location || 'Bengaluru Local').trim(),
       status: 'open',
       bids: []
     };
