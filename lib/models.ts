@@ -37,6 +37,7 @@ const artworkSchema = new mongoose.Schema(
 // Custom Demand Request Schema
 const customRequestSchema = new mongoose.Schema(
   {
+    buyerId: { type: String, default: '' },
     buyerName: { type: String, required: true },
     title: { type: String, required: true },
     category: { type: String, default: 'Modern Art' },
@@ -49,6 +50,7 @@ const customRequestSchema = new mongoose.Schema(
     bids: [
       {
         id: String,
+        artistId: { type: String, default: '' },
         artistName: String,
         amount: Number,
         daysEst: Number,
@@ -65,6 +67,7 @@ const customRequestSchema = new mongoose.Schema(
 const bidSchema = new mongoose.Schema(
   {
     requestId: { type: String, required: true },
+    artistId: { type: String, default: '' },
     artistName: String,
     amount: { type: Number, required: true },
     daysEst: Number,

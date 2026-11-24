@@ -3,7 +3,7 @@ import {
   Shield, MapPin, Plus, Phone, User, Gavel, 
   CheckCircle2, Sparkles, Clock, Briefcase,
   Eye, Check, Calendar, LogOut, Database, RefreshCw,
-  ShoppingCart, Trash2, Minus, Zap
+  ShoppingCart, Trash2, Minus, Zap, Pencil, X
 } from 'lucide-react';
 import SearchFilterBar from './components/SearchFilterBar';
 import AuthPage from './components/AuthPage';
@@ -128,6 +128,7 @@ const INITIAL_ARTWORKS = [
 const INITIAL_BUYER_REQUESTS = [
   { 
     id: 'req-1', 
+    buyerId: 'usr-aditya-rao',
     buyerName: 'Aditya Rao', 
     title: 'Custom Abstract Canvas for Living Room', 
     category: 'Modern Art', 
@@ -161,6 +162,7 @@ const INITIAL_BUYER_REQUESTS = [
   },
   { 
     id: 'req-2', 
+    buyerId: 'usr-meera-deshmukh',
     buyerName: 'Meera Deshmukh', 
     title: 'Hand-Carved Wooden Temple Arch', 
     category: 'Sculpture', 
@@ -284,7 +286,8 @@ export default function App() {
   const [sortBy, setSortBy] = useState('default');
   const [demandsFilter, setDemandsFilter] = useState('all'); // 'all' | 'open' | 'in-progress'
 
-  // Authentication Gate State - Persistent across reloads
+  // Authentication Gate State - Persistent UI flag, session verified via HttpOnly cookie / in-memory JWT
+  const [authToken, setAuthToken] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     try {
       return localStorage.getItem('artisanhub_is_authenticated') === 'true';
@@ -339,6 +342,9 @@ export default function App() {
   const [otpCode, setOtpCode] = useState('');
   const [isSubmittingArt, setIsSubmittingArt] = useState(false);
   const [isSubmittingReq, setIsSubmittingReq] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(() => currentUser?.name || '');
+  const [isEditingBio, setIsEditingBio] = useState(false);
   const [bioDraft, setBioDraft] = useState(() => currentUser?.bio || '');
 
   // Database Connection Info
@@ -377,6 +383,8 @@ export default function App() {
             imageUrl: normalizeImageUrl(art.imageUrl)
           }));
           setProducts(normalized);
+          const highest = Math.max(100000, ...normalized.map((art) => Number(art.price || 0)));
+          setMaxPriceFilter((prev) => (prev === 100000 ? highest : prev));
           try {
             localStorage.setItem('artisanhub_products_cache', JSON.stringify(normalized));
           } catch (e) {
@@ -474,6 +482,38 @@ export default function App() {
     fetchMarketplaceData();
     pollStatus();
 
+    let savedAuth = false;
+    try {
+      savedAuth = localStorage.getItem('artisanhub_is_authenticated') === 'true';
+    } catch {}
+
+    if (savedAuth) {
+      fetch(`${API_BASE_URL}/auth/me`, { credentials: 'include' })
+        .then(async (res) => {
+          if (!isMounted) return;
+          if (res.status === 401) {
+            setIsAuthenticated(false);
+            try {
+              localStorage.removeItem('artisanhub_is_authenticated');
+              localStorage.removeItem('artisanhub_current_user');
+            } catch {}
+            showNotification('Session expired. Please sign in to continue.');
+            return;
+          }
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.user) {
+            setCurrentUser((prev) => {
+              const merged = { ...prev, id: data.user.id, name: data.user.name || prev.name };
+              try {
+                localStorage.setItem('artisanhub_current_user', JSON.stringify(merged));
+              } catch {}
+              return merged;
+            });
+          }
+        })
+        .catch(() => {});
+    }
+
     return () => {
       isMounted = false;
       if (timerId) clearTimeout(timerId);
@@ -514,10 +554,21 @@ export default function App() {
     return 0;
   });
 
+  const getAuthHeaders = (extra = {}) => ({
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'ArtisanHub',
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    ...extra
+  });
+
   // Successful auth callback from AuthPage - Saves session persistently & syncs live DB
-  const handleAuthSuccess = (userData) => {
+  const handleAuthSuccess = (userData, token = '') => {
+    setAuthToken(token || '');
     setCurrentUser(userData);
+    setNameDraft(userData?.name || '');
     setBioDraft(userData?.bio || '');
+    setIsEditingName(false);
+    setIsEditingBio(false);
     setIsAuthenticated(true);
     setIsAuthViewOpen(false);
     try {
@@ -533,8 +584,16 @@ export default function App() {
 
   // Sign out back to login screen - Clears persistent session
   const handleSignOut = () => {
+    setAuthToken('');
     setIsAuthenticated(false);
     setIsAuthViewOpen(false);
+    setIsEditingName(false);
+    setIsEditingBio(false);
+    fetch(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'X-Requested-With': 'ArtisanHub' }
+    }).catch(() => {});
     try {
       localStorage.removeItem('artisanhub_is_authenticated');
       localStorage.removeItem('artisanhub_current_user');
@@ -551,17 +610,23 @@ export default function App() {
     return true;
   });
 
-  // Switch persona toggle
-  const toggleRole = () => {
-    const newRole = currentUser.role === 'buyer' ? 'artist' : 'buyer';
-    const updated = { ...currentUser, role: newRole };
+  // Switch persona to explicit target role
+  const switchRole = (targetRole) => {
+    if (currentUser.role === targetRole) return;
+    const updated = { ...currentUser, role: targetRole };
     setCurrentUser(updated);
     try {
       localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
     } catch (e) {
       console.warn(e);
     }
-    showNotification(`Switched to ${newRole === 'buyer' ? 'Buyer Portal' : 'Artist Studio'} View`);
+    showNotification(`Switched to ${targetRole === 'buyer' ? 'Buyer Gallery' : 'Artist Studio'} Mode`);
+  };
+
+  // Switch persona toggle
+  const toggleRole = () => {
+    const newRole = currentUser.role === 'buyer' ? 'artist' : 'buyer';
+    switchRole(newRole);
   };
 
   // Toggle Artwork Like
@@ -669,6 +734,17 @@ export default function App() {
     }
   };
 
+  const isDemandOwner = (req) => {
+    if (!currentUser || !req) return false;
+    if (req.buyerId && String(req.buyerId).trim()) {
+      return String(req.buyerId).trim() === String(currentUser.id || '').trim();
+    }
+    return (
+      Boolean(req.buyerName && currentUser.name) &&
+      req.buyerName.trim().toLowerCase() === currentUser.name.trim().toLowerCase()
+    );
+  };
+
   // Submit custom demand request -> Persists to backend
   const handleCreateRequestSubmit = async (e) => {
     e.preventDefault();
@@ -681,6 +757,7 @@ export default function App() {
 
     setIsSubmittingReq(true);
     const reqData = {
+      buyerId: currentUser.id,
       buyerName: (currentUser.name || 'Art Patron').trim(),
       title: newReqForm.title.trim(),
       category: newReqForm.category,
@@ -694,10 +771,17 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE_URL}/custom-requests`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: getAuthHeaders(),
         body: JSON.stringify(reqData)
       });
       const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        showNotification(data.message || 'Please sign in again to post a custom demand.');
+        return;
+      }
 
       if (!res.ok) {
         showNotification(`Could not save request to MongoDB: ${data.message || 'Server error'}`);
@@ -743,10 +827,17 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE_URL}/bids`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: getAuthHeaders(),
         body: JSON.stringify(bidPayload)
       });
       const savedBid = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        showNotification(savedBid.message || 'Please sign in again to submit a proposal.');
+        return;
+      }
 
       if (!res.ok) {
         showNotification(`Could not submit proposal to MongoDB: ${savedBid.message || 'Server error'}`);
@@ -777,13 +868,28 @@ export default function App() {
     }
   };
 
-  // Buyer accepts an artist's proposal bid
+  // Demand owner accepts an artist's proposal bid
   const handleAcceptBid = async (reqId, bidId, artistName) => {
+    const targetReq = buyerRequests.find((r) => (r.id || r._id) === reqId);
+    if (!targetReq || !isDemandOwner(targetReq)) {
+      showNotification(
+        `Only ${targetReq?.buyerName || 'the user who posted this demand'} can accept price proposals for it.`
+      );
+      return;
+    }
+
     try {
       const res = await fetch(`${API_BASE_URL}/custom-requests/${reqId}/bids/${bidId}/accept`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' }
+        credentials: 'include',
+        headers: getAuthHeaders()
       });
+      if (res.status === 401) {
+        const errData = await res.json().catch(() => ({}));
+        setIsAuthenticated(false);
+        showNotification(errData.message || 'Please sign in again to accept a proposal.');
+        return;
+      }
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         showNotification(errData.message || 'Could not accept proposal. Please try again.');
@@ -951,6 +1057,51 @@ export default function App() {
     }
   };
 
+  const handleSaveProfileField = async (fields, successMsg) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/profile`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(fields)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        showNotification(data.message || 'Session expired. Please sign in again.');
+        return false;
+      }
+      if (!res.ok) {
+        showNotification(data.message || 'Could not update profile.');
+        return false;
+      }
+
+      const nextUser = {
+        ...currentUser,
+        ...(data.user || {}),
+        ...fields
+      };
+      setCurrentUser(nextUser);
+      setNameDraft(nextUser.name || '');
+      setBioDraft(nextUser.bio || '');
+      try {
+        localStorage.setItem('artisanhub_current_user', JSON.stringify(nextUser));
+      } catch {}
+      showNotification(successMsg);
+      return true;
+    } catch {
+      const nextUser = { ...currentUser, ...fields };
+      setCurrentUser(nextUser);
+      setNameDraft(nextUser.name || '');
+      setBioDraft(nextUser.bio || '');
+      try {
+        localStorage.setItem('artisanhub_current_user', JSON.stringify(nextUser));
+      } catch {}
+      showNotification(successMsg);
+      return true;
+    }
+  };
+
   const totalCartCount = cartItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
   const cartSubtotal = cartItems.reduce(
     (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
@@ -1008,39 +1159,141 @@ export default function App() {
     );
   }
 
+  const isArtist = currentUser?.role === 'artist';
+  const theme = isArtist
+    ? {
+        page: 'bg-[#f4efe6] text-stone-900 selection:bg-emerald-700 selection:text-white',
+        toast: 'bg-emerald-700 text-white border-emerald-600',
+        toastIcon: 'text-white',
+        header: 'bg-[#fbf8f3]/95 border-stone-200 shadow-sm shadow-stone-900/5',
+        brandBox: 'bg-gradient-to-tr from-emerald-700 to-teal-600 text-white shadow-emerald-700/20',
+        brandHighlight: 'text-emerald-700',
+        brandSubDivider: 'border-stone-300',
+        dbBadge: 'bg-[#faf6f0] border-stone-300 text-stone-700',
+        dbConnectedText: 'text-emerald-700 font-semibold',
+        dbPendingText: 'text-amber-700 font-semibold',
+        navShell: 'bg-[#efe8dc] border-stone-300',
+        navActive: 'bg-emerald-700 text-white shadow-sm',
+        navIdle: 'text-stone-600 hover:text-stone-900',
+        mobileNavBorder: 'border-stone-200',
+        mobileNavIdle: 'bg-[#efe8dc] text-stone-700',
+        card: 'bg-white border-stone-200 shadow-stone-900/5',
+        cardHover: 'hover:border-emerald-700/40',
+        innerBox: 'bg-[#faf6f0] border-stone-200',
+        pillBadge: 'bg-[#faf6f0] border-stone-300 text-stone-700',
+        heading: 'text-stone-900',
+        bodyText: 'text-stone-700',
+        mutedText: 'text-stone-500',
+        subtleText: 'text-stone-600',
+        divider: 'border-stone-200',
+        accentText: 'text-emerald-700',
+        accentTag: 'bg-emerald-700/10 text-emerald-800 border-emerald-700/25',
+        accentBtn: 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg shadow-emerald-700/20',
+        secondaryBtn: 'bg-[#faf6f0] hover:bg-stone-200/70 text-stone-800 border-stone-300',
+        input: 'bg-[#faf6f0] border-stone-300 text-stone-900 placeholder:text-stone-400 focus:border-emerald-700',
+        heroSection: 'border-stone-200 bg-gradient-to-b from-[#fbf8f3] via-[#f4efe6] to-[#f4efe6]',
+        heroGlowOne: 'bg-emerald-500/10',
+        heroGlowTwo: 'bg-amber-500/10',
+        heroGradientText: 'from-emerald-700 via-teal-700 to-emerald-600',
+        heroMetricAccent: 'text-emerald-700',
+        roleSwitchShell: 'bg-[#efe8dc] border-stone-300',
+        buyerRoleActive: 'bg-slate-900 text-amber-300 shadow-sm',
+        artistRoleActive: 'bg-emerald-700 text-white shadow-sm',
+        roleIdle: 'text-stone-600 hover:text-stone-900',
+        verifiedBadge: 'bg-emerald-700/10 text-emerald-800 border-emerald-700/25',
+        signOutBtn: 'bg-[#faf6f0] hover:bg-rose-50 text-stone-600 hover:text-rose-700 border-stone-300 hover:border-rose-300',
+        timelineLine: 'border-stone-300',
+        timelineDotBorder: 'border-[#f4efe6]',
+        acceptedCard: 'border-emerald-600/40 bg-emerald-50/70',
+        modalBackdrop: 'bg-stone-950/60',
+        modalShell: 'bg-white border-stone-200 text-stone-900',
+        closeBtn: 'text-stone-500 hover:text-stone-900',
+        footer: 'border-stone-200 bg-[#fbf8f3] text-stone-600'
+      }
+    : {
+        page: 'bg-slate-950 text-slate-100 selection:bg-amber-400 selection:text-slate-950',
+        toast: 'bg-amber-400 text-slate-950 border-amber-300',
+        toastIcon: 'text-slate-950',
+        header: 'bg-slate-950/85 border-slate-800/80',
+        brandBox: 'bg-gradient-to-tr from-amber-500 to-amber-300 text-slate-950 shadow-amber-500/20',
+        brandHighlight: 'text-amber-400',
+        brandSubDivider: 'border-slate-800',
+        dbBadge: 'bg-slate-900 border-slate-800 text-slate-300',
+        dbConnectedText: 'text-emerald-300 font-semibold',
+        dbPendingText: 'text-amber-300',
+        navShell: 'bg-slate-900/90 border-slate-800',
+        navActive: 'bg-amber-400 text-slate-950 shadow-sm',
+        navIdle: 'text-slate-400 hover:text-slate-200',
+        mobileNavBorder: 'border-slate-900',
+        mobileNavIdle: 'bg-slate-900 text-slate-400',
+        card: 'bg-slate-900/90 border-slate-800',
+        cardHover: 'hover:border-slate-700',
+        innerBox: 'bg-slate-950 border-slate-800',
+        pillBadge: 'bg-slate-900/90 border-slate-800 text-slate-300',
+        heading: 'text-slate-100',
+        bodyText: 'text-slate-300',
+        mutedText: 'text-slate-400',
+        subtleText: 'text-slate-400',
+        divider: 'border-slate-800/80',
+        accentText: 'text-amber-400',
+        accentTag: 'bg-amber-400/10 text-amber-400 border-amber-400/30',
+        accentBtn: 'bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-lg shadow-amber-400/20',
+        secondaryBtn: 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700',
+        input: 'bg-slate-950 border-slate-800 text-slate-200 placeholder:text-slate-500 focus:border-amber-400',
+        heroSection: 'border-slate-800/80 bg-gradient-to-b from-slate-900/60 via-slate-950 to-slate-950',
+        heroGlowOne: 'bg-amber-500/10',
+        heroGlowTwo: 'bg-emerald-500/5',
+        heroGradientText: 'from-amber-400 via-amber-300 to-amber-500',
+        heroMetricAccent: 'text-amber-400',
+        roleSwitchShell: 'bg-slate-900 border-slate-800',
+        buyerRoleActive: 'bg-amber-400 text-slate-950 shadow-sm',
+        artistRoleActive: 'bg-emerald-600 text-white shadow-sm',
+        roleIdle: 'text-slate-400 hover:text-slate-200',
+        verifiedBadge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+        signOutBtn: 'bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-400 border-slate-800 hover:border-rose-500/30',
+        timelineLine: 'border-slate-800',
+        timelineDotBorder: 'border-slate-950',
+        acceptedCard: 'border-emerald-500/40 bg-emerald-950/10',
+        modalBackdrop: 'bg-slate-950/80',
+        modalShell: 'bg-slate-900 border-slate-800 text-slate-100',
+        closeBtn: 'text-slate-400 hover:text-white',
+        footer: 'border-slate-800/80 bg-slate-950 text-slate-500'
+      };
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-amber-400 selection:text-slate-950 pb-20">
+    <div className={`min-h-screen font-sans antialiased pb-20 transition-colors duration-300 ${theme.page}`}>
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-5 right-5 z-[100] bg-amber-400 text-slate-950 px-5 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-2.5 animate-bounce border border-amber-300">
-          <Sparkles className="w-4 h-4 shrink-0 text-slate-950" />
+        <div className={`fixed top-5 right-5 z-[100] px-5 py-3 rounded-xl font-bold shadow-2xl flex items-center gap-2.5 animate-bounce border ${theme.toast}`}>
+          <Sparkles className={`w-4 h-4 shrink-0 ${theme.toastIcon}`} />
           <span className="text-xs sm:text-sm">{toastMessage}</span>
         </div>
       )}
 
       {/* TOP BAR / HEADER */}
-      <header className="sticky top-0 z-40 bg-slate-950/85 backdrop-blur-xl border-b border-slate-800/80 px-4 sm:px-8 py-3.5">
+      <header className={`sticky top-0 z-40 backdrop-blur-xl border-b px-4 sm:px-8 py-3.5 transition-colors duration-300 ${theme.header}`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          
+
           {/* Zone 1: Brand Wordmark */}
           <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-tr from-amber-500 to-amber-300 w-9 h-9 rounded-xl flex items-center justify-center text-slate-950 font-black text-base shadow-md shadow-amber-500/20">
-              AH
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-base shadow-md ${theme.brandBox}`}>
+              {isArtist ? 'AS' : 'AH'}
             </div>
             <div>
-              <span className="text-lg font-bold tracking-tight text-slate-100">
-                Artisan<span className="text-amber-400">Hub</span>
+              <span className={`text-lg font-bold tracking-tight ${theme.heading}`}>
+                {isArtist ? 'Artisan' : 'Artisan'}
+                <span className={theme.brandHighlight}>{isArtist ? 'Studio' : 'Hub'}</span>
               </span>
-              <span className="hidden sm:inline-block text-[11px] text-slate-400 ml-2 border-l border-slate-800 pl-2">
-                Hyper-Local Art Network
+              <span className={`hidden sm:inline-block text-[11px] ml-2 border-l pl-2 ${theme.mutedText} ${theme.brandSubDivider}`}>
+                {isArtist ? 'Creator Atelier' : 'Collectors Gallery'}
               </span>
             </div>
 
             {/* Live Database Status Indicator */}
-            <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-[10px]">
-              <Database className="w-3 h-3 text-slate-400" />
-              <span className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span className={dbStatus.connected ? 'text-emerald-300 font-semibold' : 'text-amber-300'}>
+            <div className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] ${theme.dbBadge}`}>
+              <Database className={`w-3 h-3 ${theme.mutedText}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
+              <span className={dbStatus.connected ? theme.dbConnectedText : theme.dbPendingText}>
                 {dbStatus.connected
                   ? `MongoDB Atlas: ${dbStatus.database}`
                   : dbStatus.mode === 'in-memory'
@@ -1051,16 +1304,14 @@ export default function App() {
           </div>
 
           {/* Zone 2: Navigation Links */}
-          <nav className="hidden lg:flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
+          <nav className={`hidden lg:flex items-center gap-1 p-1 rounded-xl border text-xs font-semibold ${theme.navShell}`}>
             <button
               onClick={() => {
                 setActiveTab('marketplace');
                 setIsAuthViewOpen(false);
               }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'marketplace' && !isAuthViewOpen
-                  ? 'bg-amber-400 text-slate-950 shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200'
+                activeTab === 'marketplace' && !isAuthViewOpen ? theme.navActive : theme.navIdle
               }`}
             >
               Art Gallery
@@ -1071,9 +1322,7 @@ export default function App() {
                 setIsAuthViewOpen(false);
               }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'demands' && !isAuthViewOpen
-                  ? 'bg-amber-400 text-slate-950 shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200'
+                activeTab === 'demands' && !isAuthViewOpen ? theme.navActive : theme.navIdle
               }`}
             >
               Custom Demands & Bids
@@ -1084,9 +1333,7 @@ export default function App() {
                 setIsAuthViewOpen(false);
               }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'auctions' && !isAuthViewOpen
-                  ? 'bg-amber-400 text-slate-950 shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200'
+                activeTab === 'auctions' && !isAuthViewOpen ? theme.navActive : theme.navIdle
               }`}
             >
               Live Auctions
@@ -1097,12 +1344,10 @@ export default function App() {
                 setIsAuthViewOpen(false);
               }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'profile' && !isAuthViewOpen
-                  ? 'bg-amber-400 text-slate-950 shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200'
+                activeTab === 'profile' && !isAuthViewOpen ? theme.navActive : theme.navIdle
               }`}
             >
-              Collector Profile
+              {isArtist ? 'Studio Profile' : 'Collector Profile'}
             </button>
             <button
               onClick={() => {
@@ -1110,9 +1355,7 @@ export default function App() {
                 setIsAuthViewOpen(false);
               }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'future' && !isAuthViewOpen
-                  ? 'bg-amber-400 text-slate-950 shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200'
+                activeTab === 'future' && !isAuthViewOpen ? theme.navActive : theme.navIdle
               }`}
             >
               Roadmap
@@ -1124,36 +1367,34 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsCartOpen(true)}
-              className="relative flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-800 hover:border-amber-400/40 text-slate-200 transition"
+              className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition ${theme.secondaryBtn}`}
               title="View Shopping Cart"
             >
-              <ShoppingCart className="w-4 h-4 text-amber-400" />
+              <ShoppingCart className={`w-4 h-4 ${theme.accentText}`} />
               <span className="hidden sm:inline">Cart</span>
               {totalCartCount > 0 && (
-                <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded-full leading-none tabular-nums">
+                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full leading-none tabular-nums ${isArtist ? 'bg-emerald-700 text-white' : 'bg-amber-400 text-slate-950'}`}>
                   {totalCartCount}
                 </span>
               )}
             </button>
 
-            <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
+            <div className={`flex items-center p-1 rounded-xl border ${theme.roleSwitchShell}`}>
               <button
-                onClick={toggleRole}
+                type="button"
+                onClick={() => switchRole('buyer')}
                 className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  currentUser.role === 'buyer' 
-                    ? 'bg-amber-400 text-slate-950 shadow-sm' 
-                    : 'text-slate-400 hover:text-slate-200'
+                  !isArtist ? theme.buyerRoleActive : theme.roleIdle
                 }`}
               >
                 <User className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Buyer</span>
               </button>
               <button
-                onClick={toggleRole}
+                type="button"
+                onClick={() => switchRole('artist')}
                 className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  currentUser.role === 'artist' 
-                    ? 'bg-amber-400 text-slate-950 shadow-sm' 
-                    : 'text-slate-400 hover:text-slate-200'
+                  isArtist ? theme.artistRoleActive : theme.roleIdle
                 }`}
               >
                 <Briefcase className="w-3.5 h-3.5" />
@@ -1161,21 +1402,21 @@ export default function App() {
               </button>
             </div>
 
-            <button 
+            <button
               onClick={() => setIsAuthModalOpen(true)}
-              className="hidden md:flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800/80 px-2.5 py-1.5 rounded-xl text-xs font-medium border border-slate-800 text-slate-300 transition"
+              className={`hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition ${theme.secondaryBtn}`}
               title="Click to manage 2FA OTP verification"
             >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="text-[11px] font-semibold text-slate-200 truncate max-w-[110px]">{currentUser.name}</span>
-              <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+              <span className={`text-[11px] font-semibold truncate max-w-[110px] ${theme.heading}`}>{currentUser.name}</span>
+              <span className={`border px-1.5 py-0.5 rounded text-[10px] font-semibold ${theme.verifiedBadge}`}>
                 Verified
               </span>
             </button>
 
             <button
               onClick={handleSignOut}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-500/30 shadow-sm"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition border shadow-sm ${theme.signOutBtn}`}
               title="Sign out to return to login screen"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -1185,14 +1426,14 @@ export default function App() {
         </div>
 
         {/* Mobile Navigation Sub-bar */}
-        <div className="flex lg:hidden gap-1.5 overflow-x-auto scrollbar-none pt-2.5 mt-2 border-t border-slate-900">
+        <div className={`flex lg:hidden gap-1.5 overflow-x-auto scrollbar-none pt-2.5 mt-2 border-t ${theme.mobileNavBorder}`}>
           <button
             onClick={() => {
               setActiveTab('marketplace');
               setIsAuthViewOpen(false);
             }}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
-              activeTab === 'marketplace' && !isAuthViewOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-900 text-slate-400'
+              activeTab === 'marketplace' && !isAuthViewOpen ? theme.navActive : theme.mobileNavIdle
             }`}
           >
             Gallery
@@ -1203,7 +1444,7 @@ export default function App() {
               setIsAuthViewOpen(false);
             }}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
-              activeTab === 'demands' && !isAuthViewOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-900 text-slate-400'
+              activeTab === 'demands' && !isAuthViewOpen ? theme.navActive : theme.mobileNavIdle
             }`}
           >
             Demands & Bids
@@ -1214,7 +1455,7 @@ export default function App() {
               setIsAuthViewOpen(false);
             }}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
-              activeTab === 'auctions' && !isAuthViewOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-900 text-slate-400'
+              activeTab === 'auctions' && !isAuthViewOpen ? theme.navActive : theme.mobileNavIdle
             }`}
           >
             Auctions
@@ -1225,14 +1466,14 @@ export default function App() {
               setIsAuthViewOpen(false);
             }}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
-              activeTab === 'profile' && !isAuthViewOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-900 text-slate-400'
+              activeTab === 'profile' && !isAuthViewOpen ? theme.navActive : theme.mobileNavIdle
             }`}
           >
             Profile
           </button>
           <button
             onClick={handleSignOut}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap text-rose-400 hover:text-rose-300 bg-slate-900"
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${isArtist ? 'text-rose-700 bg-[#efe8dc]' : 'text-rose-400 hover:text-rose-300 bg-slate-900'}`}
           >
             Sign Out
           </button>
@@ -1243,90 +1484,107 @@ export default function App() {
       {!isAuthViewOpen && (activeTab === 'marketplace' || activeTab === 'demands') && (() => {
         const featuredArt = products.find((p) => p.featured) || products[0] || INITIAL_ARTWORKS[0];
         return (
-      <section className="relative overflow-hidden border-b border-slate-800/80 bg-gradient-to-b from-slate-900/60 via-slate-950 to-slate-950">
+      <section className={`relative overflow-hidden border-b transition-colors duration-300 ${theme.heroSection}`}>
         {/* Subtle decorative background ambient glow */}
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute top-1/3 right-10 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+        <div className={`absolute top-0 left-1/4 w-96 h-96 rounded-full blur-3xl pointer-events-none ${theme.heroGlowOne}`} />
+        <div className={`absolute top-1/3 right-10 w-96 h-96 rounded-full blur-3xl pointer-events-none ${theme.heroGlowTwo}`} />
 
         <div className="max-w-7xl mx-auto px-4 sm:px-8 py-12 lg:py-16">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
-            
+
             {/* Left Column: Value Prop & CTAs */}
             <div className="lg:col-span-7 space-y-6">
-              <div className="inline-flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3.5 py-1.5 rounded-full text-xs text-slate-300">
-                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                <span>Hyper-Local Artisan Discovery in Bengaluru</span>
-                <span className="text-slate-600">·</span>
-                <span className="text-amber-400 font-semibold">Zero Commission</span>
+              <div className={`inline-flex items-center gap-2 border px-3.5 py-1.5 rounded-full text-xs ${theme.pillBadge}`}>
+                <span className={`w-2 h-2 rounded-full ${isArtist ? 'bg-emerald-600' : 'bg-amber-400'}`}></span>
+                <span>{isArtist ? 'Artist Atelier · Direct Commissions in Bengaluru' : 'Hyper-Local Artisan Discovery in Bengaluru'}</span>
+                <span className={theme.mutedText}>·</span>
+                <span className={`${theme.accentText} font-semibold`}>Zero Commission</span>
               </div>
 
-              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-slate-100 leading-[1.15]">
-                Discover & Commission Handcrafted Art in <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-300 to-amber-500">Your Neighborhood</span>
+              <h1 className={`text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight leading-[1.15] ${theme.heading}`}>
+                {isArtist ? (
+                  <>
+                    Showcase Original Craft & Win Local Commissions in{' '}
+                    <span className={`text-transparent bg-clip-text bg-gradient-to-r ${theme.heroGradientText}`}>Your Studio</span>
+                  </>
+                ) : (
+                  <>
+                    Discover & Commission Handcrafted Art in{' '}
+                    <span className={`text-transparent bg-clip-text bg-gradient-to-r ${theme.heroGradientText}`}>Your Neighborhood</span>
+                  </>
+                )}
               </h1>
 
-              <p className="text-slate-400 text-sm sm:text-base leading-relaxed max-w-xl">
-                Directly connect with master painters, sculptors, and ceramists living near you. Post bespoke art demands, receive competitive bids from local creators, or acquire authenticated original pieces.
+              <p className={`text-sm sm:text-base leading-relaxed max-w-xl ${theme.mutedText}`}>
+                {isArtist
+                  ? 'Publish authenticated works directly to neighborhood collectors, bid on custom art briefs with fair pricing, and retain 100% of every sale.'
+                  : 'Directly connect with master painters, sculptors, and ceramists living near you. Post bespoke art demands, receive competitive bids from local creators, or acquire authenticated original pieces.'}
               </p>
 
               {/* Action Buttons */}
               <div className="flex flex-wrap items-center gap-3 pt-2">
-                <button
-                  onClick={() => {
-                    setCurrentUser(prev => {
-                      const updated = { ...prev, role: 'buyer' };
-                      try {
-                        localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
-                      } catch {}
-                      return updated;
-                    });
-                    setIsCreateRequestOpen(true);
-                  }}
-                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-6 py-3 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 shadow-lg shadow-amber-400/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  <Plus className="w-4 h-4" /> Post Custom Demand
-                </button>
+                {isArtist ? (
+                  <>
+                    <button
+                      onClick={() => setIsAddArtOpen(true)}
+                      className={`px-6 py-3 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] ${theme.accentBtn}`}
+                    >
+                      <Plus className="w-4 h-4" /> List Your Artwork
+                    </button>
 
-                <button
-                  onClick={() => {
-                    setCurrentUser(prev => {
-                      const updated = { ...prev, role: 'artist' };
-                      try {
-                        localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
-                      } catch {}
-                      return updated;
-                    });
-                    setIsAddArtOpen(true);
-                  }}
-                  className="bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white px-6 py-3 rounded-xl text-xs sm:text-sm font-semibold border border-slate-700/80 flex items-center gap-2 transition-all hover:scale-[1.02]"
-                >
-                  <Briefcase className="w-4 h-4 text-amber-400" /> List Your Artwork
-                </button>
+                    <button
+                      onClick={() => setActiveTab('demands')}
+                      className={`px-6 py-3 rounded-xl text-xs sm:text-sm font-semibold border flex items-center gap-2 transition-all hover:scale-[1.02] ${theme.secondaryBtn}`}
+                    >
+                      <Gavel className={`w-4 h-4 ${theme.accentText}`} /> Browse Patron Demands
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setIsCreateRequestOpen(true)}
+                      className={`px-6 py-3 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] ${theme.accentBtn}`}
+                    >
+                      <Plus className="w-4 h-4" /> Post Custom Demand
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        switchRole('artist');
+                        setIsAddArtOpen(true);
+                      }}
+                      className={`px-6 py-3 rounded-xl text-xs sm:text-sm font-semibold border flex items-center gap-2 transition-all hover:scale-[1.02] ${theme.secondaryBtn}`}
+                    >
+                      <Briefcase className={`w-4 h-4 ${theme.accentText}`} /> List Your Artwork
+                    </button>
+                  </>
+                )}
               </div>
 
               {/* Trust Metrics Bar */}
-              <div className="grid grid-cols-3 gap-4 pt-6 border-t border-slate-800/80 max-w-lg">
+              <div className={`grid grid-cols-3 gap-4 pt-6 border-t max-w-lg ${theme.divider}`}>
                 <div>
-                  <div className="text-lg sm:text-xl font-black text-slate-100 tabular-nums">180+</div>
-                  <div className="text-[11px] text-slate-500 font-medium">Local Artisans</div>
+                  <div className={`text-lg sm:text-xl font-black tabular-nums ${theme.heading}`}>180+</div>
+                  <div className={`text-[11px] font-medium ${theme.mutedText}`}>Local Artisans</div>
                 </div>
                 <div>
-                  <div className="text-lg sm:text-xl font-black text-amber-400 tabular-nums">₹12.4L+</div>
-                  <div className="text-[11px] text-slate-500 font-medium">Direct Commissions</div>
+                  <div className={`text-lg sm:text-xl font-black tabular-nums ${theme.heroMetricAccent}`}>₹12.4L+</div>
+                  <div className={`text-[11px] font-medium ${theme.mutedText}`}>Direct Commissions</div>
                 </div>
                 <div>
-                  <div className="text-lg sm:text-xl font-black text-emerald-400 tabular-nums">100%</div>
-                  <div className="text-[11px] text-slate-500 font-medium">Phone-Verified</div>
+                  <div className={`text-lg sm:text-xl font-black tabular-nums ${isArtist ? 'text-teal-700' : 'text-emerald-400'}`}>100%</div>
+                  <div className={`text-[11px] font-medium ${theme.mutedText}`}>Phone-Verified</div>
                 </div>
               </div>
             </div>
 
             {/* Right Column: Curated Artwork Spotlight Card */}
             <div className="lg:col-span-5">
-              <div className="relative group bg-slate-900/90 border border-slate-800 rounded-3xl overflow-hidden p-3 shadow-2xl shadow-slate-950/80 transition-all hover:border-slate-700">
+              <div className={`relative group border rounded-3xl overflow-hidden p-3 shadow-2xl transition-all ${theme.card} ${theme.cardHover}`}>
                 <div className="relative h-72 sm:h-80 rounded-2xl overflow-hidden bg-slate-950">
-                  <img 
-                    src={featuredArt.imageUrl || '/art-fallback.svg'} 
-                    alt={featuredArt.title || 'Curated Artwork of the Week'} 
+                  <img
+                    src={featuredArt.imageUrl || '/art-fallback.svg'}
+                    alt={featuredArt.title || 'Curated Artwork of the Week'}
                     onError={(e) => {
                       e.currentTarget.onerror = null;
                       e.currentTarget.src = '/art-fallback.svg';
@@ -1337,11 +1595,11 @@ export default function App() {
 
                   {/* Top Glassmorphic Badges */}
                   <div className="absolute top-3 left-3 right-3 flex items-center justify-between">
-                    <span className="backdrop-blur-md bg-slate-950/70 border border-white/10 text-amber-400 text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1.5 shadow-sm">
+                    <span className={`backdrop-blur-md bg-slate-950/70 border border-white/10 text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1.5 shadow-sm ${isArtist ? 'text-emerald-300' : 'text-amber-400'}`}>
                       <Sparkles className="w-3 h-3" /> Featured of the Week
                     </span>
                     <span className="backdrop-blur-md bg-slate-950/70 border border-white/10 text-slate-200 text-[10px] font-medium px-2.5 py-1 rounded-full flex items-center gap-1">
-                      <MapPin className="w-3 h-3 text-amber-400" /> {(featuredArt.location || 'Bengaluru').split(',')[0]}
+                      <MapPin className={`w-3 h-3 ${isArtist ? 'text-emerald-300' : 'text-amber-400'}`} /> {(featuredArt.location || 'Bengaluru').split(',')[0]}
                     </span>
                   </div>
 
@@ -1354,15 +1612,15 @@ export default function App() {
 
                 <div className="p-3 pt-4 flex items-center justify-between">
                   <div>
-                    <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold block">Artisan Asking Price</span>
-                    <span className="text-xl font-black text-amber-400 tabular-nums">{formatPrice(featuredArt.price)}</span>
+                    <span className={`text-[10px] uppercase tracking-wider font-bold block ${theme.mutedText}`}>Artisan Asking Price</span>
+                    <span className={`text-xl font-black tabular-nums ${theme.accentText}`}>{formatPrice(featuredArt.price)}</span>
                   </div>
 
-                  <button 
+                  <button
                     onClick={() => setQuickViewProduct(featuredArt)}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700"
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border ${theme.secondaryBtn}`}
                   >
-                    <Eye className="w-3.5 h-3.5 text-amber-400" /> Quick View
+                    <Eye className={`w-3.5 h-3.5 ${theme.accentText}`} /> Quick View
                   </button>
                 </div>
               </div>
@@ -1390,23 +1648,23 @@ export default function App() {
           <div className="space-y-8">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
               <div>
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">Hyper-Local Art Gallery</h2>
-                <p className="text-xs sm:text-sm text-slate-400 mt-1">Authentic original artworks directly curated from neighborhood creators</p>
+                <h2 className={`text-2xl sm:text-3xl font-extrabold tracking-tight ${theme.heading}`}>Hyper-Local Art Gallery</h2>
+                <p className={`text-xs sm:text-sm mt-1 ${theme.mutedText}`}>Authentic original artworks directly curated from neighborhood creators</p>
               </div>
 
-              {currentUser.role === 'artist' ? (
+              {isArtist ? (
                 <button
                   onClick={() => setIsAddArtOpen(true)}
-                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition shadow-lg shadow-amber-400/20 shrink-0"
+                  className={`px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition shrink-0 ${theme.accentBtn}`}
                 >
                   <Plus className="w-4 h-4" /> List New Artwork
                 </button>
               ) : (
                 <button
                   onClick={() => setIsCreateRequestOpen(true)}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition border border-slate-700 shrink-0"
+                  className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition border shrink-0 ${theme.secondaryBtn}`}
                 >
-                  <Plus className="w-4 h-4 text-amber-400" /> Post Custom Request
+                  <Plus className={`w-4 h-4 ${theme.accentText}`} /> Post Custom Request
                 </button>
               )}
             </div>
@@ -1428,9 +1686,10 @@ export default function App() {
               setSortBy={setSortBy}
               onResetFilters={handleResetFilters}
               totalResults={filteredProducts.length}
+              isArtist={isArtist}
             />
 
-            {/* Responsive Glassmorphism Art Gallery Grid */}
+            {/* Responsive Gallery Grid */}
             <ArtGalleryGrid
               artworks={filteredProducts}
               likedArtworks={likedArtworks}
@@ -1441,6 +1700,7 @@ export default function App() {
               onAddToCart={handleAddToCart}
               onBuyNow={handleBuyNow}
               onResetFilters={handleResetFilters}
+              isArtist={isArtist}
             />
           </div>
         )}
@@ -1450,14 +1710,14 @@ export default function App() {
           <div className="space-y-8">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
               <div>
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">Buyer Art Demands & Bidding Portal</h2>
-                <p className="text-xs sm:text-sm text-slate-400 mt-1">Patrons submit custom commission requirements while verified neighborhood artists submit price quotes</p>
+                <h2 className={`text-2xl sm:text-3xl font-extrabold tracking-tight ${theme.heading}`}>Buyer Art Demands & Bidding Portal</h2>
+                <p className={`text-xs sm:text-sm mt-1 ${theme.mutedText}`}>Patrons submit custom commission requirements while verified neighborhood artists submit price quotes</p>
               </div>
 
-              {currentUser.role === 'buyer' && (
+              {!isArtist && (
                 <button
                   onClick={() => setIsCreateRequestOpen(true)}
-                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition shadow-lg shadow-amber-400/20 shrink-0"
+                  className={`px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition shrink-0 ${theme.accentBtn}`}
                 >
                   <Plus className="w-4 h-4" /> Post Custom Art Need
                 </button>
@@ -1465,11 +1725,11 @@ export default function App() {
             </div>
 
             {/* Demands Filter Strip */}
-            <div className="flex items-center gap-2 bg-slate-900/90 p-1.5 rounded-xl border border-slate-800 w-fit">
+            <div className={`flex items-center gap-2 p-1.5 rounded-xl border w-fit ${theme.navShell}`}>
               <button
                 onClick={() => setDemandsFilter('all')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  demandsFilter === 'all' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'
+                  demandsFilter === 'all' ? `${theme.navActive} font-bold` : theme.navIdle
                 }`}
               >
                 All Demands ({buyerRequests.length})
@@ -1477,7 +1737,7 @@ export default function App() {
               <button
                 onClick={() => setDemandsFilter('open')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  demandsFilter === 'open' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'
+                  demandsFilter === 'open' ? `${theme.navActive} font-bold` : theme.navIdle
                 }`}
               >
                 Accepting Bids
@@ -1485,7 +1745,7 @@ export default function App() {
               <button
                 onClick={() => setDemandsFilter('in-progress')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  demandsFilter === 'in-progress' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'
+                  demandsFilter === 'in-progress' ? `${theme.navActive} font-bold` : theme.navIdle
                 }`}
               >
                 In Progress
@@ -1496,63 +1756,77 @@ export default function App() {
             <div className="space-y-6">
               {filteredRequests.map(req => {
                 const isOpen = req.status === 'open';
+                const isOwner = isDemandOwner(req);
                 return (
-                  <div key={req.id || req._id} className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-xl">
-                    
+                  <div key={req.id || req._id} className={`border rounded-3xl p-6 space-y-6 shadow-xl ${theme.card}`}>
+
                     {/* Header Row */}
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-slate-800/80">
+                    <div className={`flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b ${theme.divider}`}>
                       <div className="space-y-1.5">
                         <div className="flex flex-wrap items-center gap-2.5">
-                          <span className="bg-amber-400/10 text-amber-400 border border-amber-400/30 text-[11px] font-bold px-2.5 py-0.5 rounded-md">
+                          <span className={`border text-[11px] font-bold px-2.5 py-0.5 rounded-md ${theme.accentTag}`}>
                             {req.category}
                           </span>
                           <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-md border ${
-                            isOpen 
-                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
-                              : 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                            isOpen
+                              ? isArtist
+                                ? 'bg-emerald-700/10 text-emerald-800 border-emerald-700/25'
+                                : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                              : isArtist
+                                ? 'bg-purple-700/10 text-purple-800 border-purple-700/25'
+                                : 'bg-purple-500/10 text-purple-400 border-purple-500/30'
                           }`}>
                             {isOpen ? 'Open for Bidding' : 'Proposal Accepted'}
                           </span>
-                          <h3 className="font-bold text-lg text-slate-100">{req.title}</h3>
+                          {isOwner && (
+                            <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-md border ${
+                              isArtist
+                                ? 'bg-amber-600/10 text-amber-800 border-amber-600/30'
+                                : 'bg-sky-500/10 text-sky-300 border-sky-500/30'
+                            }`}>
+                              Posted by You
+                            </span>
+                          )}
+                          <h3 className={`font-bold text-lg ${theme.heading}`}>{req.title}</h3>
                         </div>
-                        <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                          Posted by <span className="text-slate-200 font-medium">{req.buyerName}</span>
+                        <p className={`text-xs flex items-center gap-1.5 ${theme.mutedText}`}>
+                          Posted by <span className={`font-medium ${theme.heading}`}>{req.buyerName}</span>
                           <span>·</span>
-                          <MapPin className="w-3.5 h-3.5 text-amber-400" /> {req.location}
+                          <MapPin className={`w-3.5 h-3.5 ${theme.accentText}`} /> {req.location}
                           <span>·</span>
-                          <span className="text-slate-500">{formatPostedDate(req.createdAt)}</span>
+                          <span>{formatPostedDate(req.createdAt)}</span>
                         </p>
                       </div>
 
-                      <div className="bg-slate-950 px-4 py-2.5 rounded-2xl border border-slate-800 text-left md:text-right shrink-0">
-                        <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">Target Budget</span>
-                        <span className="text-base font-extrabold text-amber-400 tabular-nums">
+                      <div className={`px-4 py-2.5 rounded-2xl border text-left md:text-right shrink-0 ${theme.innerBox}`}>
+                        <span className={`text-[10px] font-semibold uppercase tracking-wider block ${theme.mutedText}`}>Target Budget</span>
+                        <span className={`text-base font-extrabold tabular-nums ${theme.accentText}`}>
                           {formatPrice(req.budgetMin)} - {formatPrice(req.budgetMax)}
                         </span>
                       </div>
                     </div>
 
                     {/* Demand Brief Body */}
-                    <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 space-y-2">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Patron's Brief & Specifications</span>
-                      <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">{req.description}</p>
+                    <div className={`p-4 rounded-2xl border space-y-2 ${theme.innerBox}`}>
+                      <span className={`text-[10px] font-bold uppercase tracking-wider ${theme.mutedText}`}>Patron&apos;s Brief & Specifications</span>
+                      <p className={`text-xs sm:text-sm leading-relaxed ${theme.bodyText}`}>{req.description}</p>
                     </div>
 
                     {/* Timeline & Actions Footer */}
-                    <div className="flex flex-wrap justify-between items-center gap-4 text-xs text-slate-400 pt-1">
+                    <div className={`flex flex-wrap justify-between items-center gap-4 text-xs pt-1 ${theme.mutedText}`}>
                       <div className="flex items-center gap-4">
                         <span className="flex items-center gap-1.5">
-                          <Calendar className="w-4 h-4 text-slate-500" /> Deadline: <span className="text-slate-200 font-semibold">{req.deadline}</span>
+                          <Calendar className="w-4 h-4" /> Deadline: <span className={`font-semibold ${theme.heading}`}>{req.deadline}</span>
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <Gavel className="w-4 h-4 text-slate-500" /> Bids Submitted: <span className="text-amber-400 font-bold">{req.bids?.length || 0}</span>
+                          <Gavel className="w-4 h-4" /> Bids Submitted: <span className={`font-bold ${theme.accentText}`}>{req.bids?.length || 0}</span>
                         </span>
                       </div>
 
-                      {currentUser.role === 'artist' && (
+                      {isArtist && !isOwner && isOpen && (
                         <button
                           onClick={() => setActiveBidModalItem(req)}
-                          className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-amber-400/20"
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${theme.accentBtn}`}
                         >
                           <Gavel className="w-3.5 h-3.5" /> Submit Price Proposal
                         </button>
@@ -1560,77 +1834,89 @@ export default function App() {
                     </div>
 
                     {/* BIDDING TIMELINE VIEW */}
-                    <div className="pt-4 border-t border-slate-800/80 space-y-4">
+                    <div className={`pt-4 border-t space-y-4 ${theme.divider}`}>
                       <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                          <Clock className="w-3.5 h-3.5 text-amber-400" /> Active Artist Bids Timeline
+                        <h4 className={`text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${theme.bodyText}`}>
+                          <Clock className={`w-3.5 h-3.5 ${theme.accentText}`} /> Active Artist Bids Timeline
                         </h4>
-                        <span className="text-[11px] text-slate-500">
+                        <span className={`text-[11px] ${theme.mutedText}`}>
                           {req.bids?.length ? `${req.bids.length} proposal(s)` : 'No bids yet'}
                         </span>
                       </div>
 
                       {req.bids && req.bids.length > 0 ? (
-                        <div className="relative pl-6 border-l-2 border-slate-800 space-y-5">
+                        <div className={`relative pl-6 border-l-2 space-y-5 ${theme.timelineLine}`}>
                           {req.bids.map((bid) => {
                             const isAccepted = bid.status === 'Accepted';
                             return (
                               <div key={bid.id} className="relative group">
                                 {/* Timeline Dot */}
-                                <div className={`absolute -left-[31px] top-3 w-3 h-3 rounded-full border-2 transition-all ${
-                                  isAccepted 
-                                    ? 'bg-emerald-400 border-slate-950 ring-4 ring-emerald-500/20' 
-                                    : 'bg-amber-400 border-slate-950 ring-4 ring-amber-400/20'
+                                <div className={`absolute -left-[31px] top-3 w-3 h-3 rounded-full border-2 transition-all ${theme.timelineDotBorder} ${
+                                  isAccepted
+                                    ? 'bg-emerald-500 ring-4 ring-emerald-500/20'
+                                    : isArtist
+                                      ? 'bg-emerald-700 ring-4 ring-emerald-700/20'
+                                      : 'bg-amber-400 ring-4 ring-amber-400/20'
                                 }`} />
 
                                 {/* Bid Card Content */}
-                                <div className={`bg-slate-950 border rounded-2xl p-4 space-y-3 transition ${
-                                  isAccepted ? 'border-emerald-500/40 bg-emerald-950/10' : 'border-slate-800 hover:border-slate-700'
+                                <div className={`border rounded-2xl p-4 space-y-3 transition ${
+                                  isAccepted ? theme.acceptedCard : `${theme.innerBox} ${theme.cardHover}`
                                 }`}>
                                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                                     <div className="flex items-center gap-2">
-                                      <div className="w-7 h-7 bg-amber-400/10 text-amber-400 rounded-lg flex items-center justify-center font-bold text-xs">
+                                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs ${isArtist ? 'bg-emerald-700/15 text-emerald-800' : 'bg-amber-400/10 text-amber-400'}`}>
                                         {(bid.artistName || 'A').charAt(0)}
                                       </div>
                                       <div>
-                                        <div className="font-semibold text-xs sm:text-sm text-slate-200">{bid.artistName}</div>
-                                        <div className="text-[10px] text-slate-500">{bid.timestamp || 'Recent proposal'}</div>
+                                        <div className={`font-semibold text-xs sm:text-sm ${theme.heading}`}>{bid.artistName}</div>
+                                        <div className={`text-[10px] ${theme.mutedText}`}>{bid.timestamp || 'Recent proposal'}</div>
                                       </div>
                                     </div>
 
                                     <div className="flex items-center gap-3">
                                       {/* Status Badge */}
                                       <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1 ${
-                                        isAccepted 
-                                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' 
-                                          : 'bg-amber-400/15 text-amber-300 border-amber-400/30'
+                                        isAccepted
+                                          ? isArtist
+                                            ? 'bg-emerald-700/15 text-emerald-800 border-emerald-700/30'
+                                            : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                          : isArtist
+                                            ? 'bg-amber-600/15 text-amber-800 border-amber-600/30'
+                                            : 'bg-amber-400/15 text-amber-300 border-amber-400/30'
                                       }`}>
                                         {isAccepted ? <Check className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
                                         {bid.status || 'Pending'}
                                       </span>
 
                                       <div className="text-right">
-                                        <div className="text-sm sm:text-base font-black text-amber-400 tabular-nums">
+                                        <div className={`text-sm sm:text-base font-black tabular-nums ${theme.accentText}`}>
                                           {formatPrice(bid.amount)}
                                         </div>
-                                        <div className="text-[10px] text-slate-400">Est. {bid.daysEst} Days</div>
+                                        <div className={`text-[10px] ${theme.mutedText}`}>Est. {bid.daysEst} Days</div>
                                       </div>
                                     </div>
                                   </div>
 
-                                  <p className="text-xs text-slate-300 italic bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/60">
-                                    "{bid.proposal}"
+                                  <p className={`text-xs italic p-2.5 rounded-xl border ${isArtist ? 'bg-white border-stone-200 text-stone-700' : 'bg-slate-900/60 border-slate-800/60 text-slate-300'}`}>
+                                    &ldquo;{bid.proposal}&rdquo;
                                   </p>
 
-                                  {/* Buyer Accept Action */}
-                                  {currentUser.role === 'buyer' && isOpen && !isAccepted && (
+                                  {/* Owner-Only Accept Action */}
+                                  {isOpen && !isAccepted && (
                                     <div className="flex justify-end pt-1">
-                                      <button
-                                        onClick={() => handleAcceptBid(req.id || req._id, bid.id, bid.artistName)}
-                                        className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
-                                      >
-                                        <Check className="w-3.5 h-3.5" /> Accept Proposal
-                                      </button>
+                                      {isOwner ? (
+                                        <button
+                                          onClick={() => handleAcceptBid(req.id || req._id, bid.id, bid.artistName)}
+                                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
+                                        >
+                                          <Check className="w-3.5 h-3.5" /> Accept Proposal
+                                        </button>
+                                      ) : (
+                                        <span className={`text-[11px] font-medium ${theme.mutedText}`}>
+                                          Only {req.buyerName} can accept this proposal
+                                        </span>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -1639,7 +1925,7 @@ export default function App() {
                           })}
                         </div>
                       ) : (
-                        <div className="text-xs text-slate-500 italic bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                        <div className={`text-xs italic p-4 rounded-xl border text-center ${theme.innerBox} ${theme.mutedText}`}>
                           No artist bids received yet. Verified artisans in your neighborhood have been notified.
                         </div>
                       )}
@@ -1656,13 +1942,13 @@ export default function App() {
         {activeTab === 'auctions' && (
           <div className="space-y-8">
             <div>
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">Special Limited Edition Auctions</h2>
-              <p className="text-xs sm:text-sm text-slate-400 mt-1">Exclusive timed bidding portal for rare, numbered, and high-value masterworks</p>
+              <h2 className={`text-2xl sm:text-3xl font-extrabold tracking-tight ${theme.heading}`}>Special Limited Edition Auctions</h2>
+              <p className={`text-xs sm:text-sm mt-1 ${theme.mutedText}`}>Exclusive timed bidding portal for rare, numbered, and high-value masterworks</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
               {auctions.map(auc => (
-                <div key={auc.id || auc._id} className="bg-slate-900/90 border border-slate-800 rounded-3xl overflow-hidden p-5 flex flex-col sm:flex-row gap-5 shadow-xl hover:border-slate-700 transition">
+                <div key={auc.id || auc._id} className={`border rounded-3xl overflow-hidden p-5 flex flex-col sm:flex-row gap-5 shadow-xl transition ${theme.card} ${theme.cardHover}`}>
                   <div className="relative w-full sm:w-48 h-52 sm:h-auto rounded-2xl overflow-hidden bg-slate-950 shrink-0">
                     <img
                       src={auc.imageUrl || '/art-fallback.svg'}
@@ -1673,32 +1959,32 @@ export default function App() {
                       }}
                       className="w-full h-full object-cover"
                     />
-                    <div className="absolute top-2.5 left-2.5 backdrop-blur-md bg-slate-950/75 border border-white/10 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-md">
+                    <div className={`absolute top-2.5 left-2.5 backdrop-blur-md bg-slate-950/75 border border-white/10 text-[10px] font-bold px-2 py-0.5 rounded-md ${isArtist ? 'text-emerald-300' : 'text-amber-400'}`}>
                       LIVE
                     </div>
                   </div>
 
                   <div className="flex-1 flex flex-col justify-between space-y-4">
                     <div className="space-y-1.5">
-                      <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">{auc.category}</span>
-                      <h3 className="font-bold text-base text-slate-100">{auc.title}</h3>
-                      <p className="text-xs text-slate-400">By <span className="text-slate-200 font-medium">{auc.artist}</span></p>
-                      <p className="text-xs text-slate-400 line-clamp-2 pt-1">{auc.description}</p>
+                      <span className={`text-[10px] font-bold uppercase tracking-wider ${theme.accentText}`}>{auc.category}</span>
+                      <h3 className={`font-bold text-base ${theme.heading}`}>{auc.title}</h3>
+                      <p className={`text-xs ${theme.mutedText}`}>By <span className={`font-medium ${theme.heading}`}>{auc.artist}</span></p>
+                      <p className={`text-xs line-clamp-2 pt-1 ${theme.mutedText}`}>{auc.description}</p>
                     </div>
 
-                    <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80 flex items-center justify-between">
+                    <div className={`p-3 rounded-2xl border flex items-center justify-between ${theme.innerBox}`}>
                       <div>
-                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Current High Bid</span>
-                        <span className="text-xl font-black text-amber-400 tabular-nums">{formatPrice(auc.currentBid)}</span>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider block ${theme.mutedText}`}>Current High Bid</span>
+                        <span className={`text-xl font-black tabular-nums ${theme.accentText}`}>{formatPrice(auc.currentBid)}</span>
                       </div>
                       <div className="text-right">
-                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Bids Placed</span>
-                        <span className="text-xs font-bold text-slate-300 tabular-nums">{auc.bidsCount} Bids</span>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider block ${theme.mutedText}`}>Bids Placed</span>
+                        <span className={`text-xs font-bold tabular-nums ${theme.bodyText}`}>{auc.bidsCount} Bids</span>
                       </div>
                     </div>
 
                     {/* Quick Bid Form */}
-                    <form 
+                    <form
                       onSubmit={e => {
                         e.preventDefault();
                         const input = e.target.elements.bidVal;
@@ -1707,16 +1993,16 @@ export default function App() {
                       }}
                       className="flex gap-2"
                     >
-                      <input 
+                      <input
                         name="bidVal"
-                        type="number" 
+                        type="number"
                         placeholder={`> ${formatPrice(auc.currentBid)}`}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-400 transition"
+                        className={`w-full border rounded-xl px-3 py-2 text-xs focus:outline-none transition ${theme.input}`}
                         required
                       />
-                      <button 
-                        type="submit" 
-                        className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1 whitespace-nowrap shadow-md shadow-amber-400/20"
+                      <button
+                        type="submit"
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1 whitespace-nowrap ${theme.accentBtn}`}
                       >
                         <Gavel className="w-3.5 h-3.5" /> Place Bid
                       </button>
@@ -1731,94 +2017,180 @@ export default function App() {
         {/* ================= TAB 4: ACCOUNT PROFILE & SECURITY ================= */}
         {activeTab === 'profile' && (
           <div className="space-y-6 max-w-3xl mx-auto">
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl">
+            <div className={`border rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl ${theme.card}`}>
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 bg-gradient-to-tr from-amber-500 to-amber-300 rounded-2xl flex items-center justify-center text-slate-950 font-black text-2xl shadow-lg shadow-amber-500/20">
+                  <div className={`w-16 h-16 rounded-2xl flex items-center justify-center font-black text-2xl shadow-lg ${theme.brandBox}`}>
                     {(currentUser.name || 'A').charAt(0)}
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-xl font-bold text-slate-100">{currentUser.name}</h2>
-                      <span className="bg-amber-400/10 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-400/30 uppercase">
-                        {currentUser.role}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 flex items-center gap-1 mt-1">
-                      <MapPin className="w-3.5 h-3.5 text-amber-400" /> {currentUser.location || 'Bengaluru Local'} · Member since {currentUser.joinedDate || '2026'}
+                  <div className="space-y-1">
+                    {isEditingName ? (
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          const trimmed = nameDraft.trim();
+                          if (!trimmed) {
+                            showNotification('Display name cannot be empty.');
+                            return;
+                          }
+                          const ok = await handleSaveProfileField({ name: trimmed }, 'Display name updated!');
+                          if (ok) setIsEditingName(false);
+                        }}
+                        className="flex flex-wrap items-center gap-2"
+                      >
+                        <input
+                          type="text"
+                          value={nameDraft}
+                          onChange={(e) => setNameDraft(e.target.value)}
+                          autoFocus
+                          maxLength={60}
+                          className={`border rounded-xl px-3 py-1.5 text-sm font-bold focus:outline-none transition ${theme.input}`}
+                          placeholder="Enter display name"
+                        />
+                        <button
+                          type="submit"
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 ${theme.accentBtn}`}
+                        >
+                          <Check className="w-3.5 h-3.5" /> Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNameDraft(currentUser.name || '');
+                            setIsEditingName(false);
+                          }}
+                          className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1 ${theme.secondaryBtn}`}
+                        >
+                          <X className="w-3.5 h-3.5" /> Cancel
+                        </button>
+                      </form>
+                    ) : (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h2 className={`text-xl font-bold ${theme.heading}`}>{currentUser.name}</h2>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNameDraft(currentUser.name || '');
+                            setIsEditingName(true);
+                          }}
+                          className={`p-1.5 rounded-lg border transition ${theme.secondaryBtn}`}
+                          title="Edit display name"
+                          aria-label="Edit display name"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${theme.accentTag}`}>
+                          {currentUser.role}
+                        </span>
+                      </div>
+                    )}
+                    <p className={`text-xs flex items-center gap-1 ${theme.mutedText}`}>
+                      <MapPin className={`w-3.5 h-3.5 ${theme.accentText}`} /> {currentUser.location || 'Bengaluru Local'} · Member since {currentUser.joinedDate || '2026'}
                     </p>
                   </div>
                 </div>
 
-                <button 
+                <button
                   onClick={toggleRole}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-xs font-semibold border border-slate-700 transition"
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold border transition shrink-0 ${theme.secondaryBtn}`}
                 >
-                  Switch to {currentUser.role === 'buyer' ? 'Artist Studio' : 'Buyer Portal'}
+                  Switch to {isArtist ? 'Buyer Portal' : 'Artist Studio'}
                 </button>
               </div>
 
-              <div className="space-y-3 pt-6 border-t border-slate-800/80">
-                <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-emerald-400" /> Identity Verification & Authenticity
+              <div className={`space-y-3 pt-6 border-t ${theme.divider}`}>
+                <h3 className={`text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${theme.bodyText}`}>
+                  <Shield className="w-4 h-4 text-emerald-500" /> Identity Verification & Authenticity
                 </h3>
-                
-                <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+
+                <div className={`border p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${theme.innerBox}`}>
                   <div>
-                    <p className="text-xs font-semibold text-slate-200">
+                    <p className={`text-xs font-semibold ${theme.heading}`}>
                       {currentUser.phone || currentUser.email || 'Not provided'}
                     </p>
-                    <p className="text-[11px] text-emerald-400 flex items-center gap-1.5 mt-0.5 font-medium">
+                    <p className={`text-[11px] flex items-center gap-1.5 mt-0.5 font-medium ${isArtist ? 'text-emerald-700' : 'text-emerald-400'}`}>
                       <CheckCircle2 className="w-3.5 h-3.5" /> Authenticated with OTP Verification
                     </p>
                   </div>
-                  <button 
+                  <button
                     onClick={() => setIsAuthModalOpen(true)}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3.5 py-1.5 rounded-xl text-xs font-semibold border border-slate-700 transition"
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold border transition ${theme.secondaryBtn}`}
                   >
                     Manage Phone
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-xs text-slate-400 font-semibold block">Artisan & Collector Bio</label>
-                <textarea 
-                  value={bioDraft}
-                  onChange={(e) => setBioDraft(e.target.value)}
-                  rows={3}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-amber-400 transition"
-                ></textarea>
-              </div>
+              <div className={`space-y-2.5 pt-2 border-t ${theme.divider}`}>
+                <div className="flex items-center justify-between pt-3">
+                  <label className={`text-xs font-semibold ${theme.mutedText}`}>Artisan & Collector Bio</label>
+                  {!isEditingBio && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBioDraft(currentUser.bio || '');
+                        setIsEditingBio(true);
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition ${theme.secondaryBtn}`}
+                      title="Edit bio"
+                    >
+                      <Pencil className="w-3 h-3" /> Edit
+                    </button>
+                  )}
+                </div>
 
-              <button 
-                onClick={() => {
-                  setCurrentUser(prev => {
-                    const updated = { ...prev, bio: bioDraft };
-                    try {
-                      localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
-                    } catch {}
-                    return updated;
-                  });
-                  showNotification("Profile information updated successfully!");
-                }}
-                className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-6 py-2.5 rounded-xl text-xs font-bold transition shadow-md shadow-amber-400/20"
-              >
-                Save Profile Changes
-              </button>
+                {isEditingBio ? (
+                  <div className="space-y-2.5">
+                    <textarea
+                      value={bioDraft}
+                      onChange={(e) => setBioDraft(e.target.value)}
+                      rows={3}
+                      autoFocus
+                      placeholder="Write a brief note about your artistic style or collecting tastes..."
+                      className={`w-full border rounded-xl p-3 text-xs sm:text-sm focus:outline-none transition ${theme.input}`}
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBioDraft(currentUser.bio || '');
+                          setIsEditingBio(false);
+                        }}
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1 ${theme.secondaryBtn}`}
+                      >
+                        <X className="w-3.5 h-3.5" /> Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const ok = await handleSaveProfileField({ bio: bioDraft.trim() }, 'Bio updated successfully!');
+                          if (ok) setIsEditingBio(false);
+                        }}
+                        className={`px-4 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 ${theme.accentBtn}`}
+                      >
+                        <Check className="w-3.5 h-3.5" /> Save Bio
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className={`border rounded-2xl p-4 text-xs sm:text-sm leading-relaxed ${theme.innerBox} ${currentUser.bio ? theme.bodyText : `${theme.mutedText} italic`}`}>
+                    {currentUser.bio || 'No bio added yet. Click the pencil icon to introduce yourself.'}
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* Collector Order History */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-4 shadow-xl">
+            <div className={`border rounded-3xl p-6 sm:p-8 space-y-4 shadow-xl ${theme.card}`}>
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                  <ShoppingCart className="w-4 h-4 text-amber-400" /> Acquired Artworks & Orders
+                <h3 className={`text-base font-bold flex items-center gap-2 ${theme.heading}`}>
+                  <ShoppingCart className={`w-4 h-4 ${theme.accentText}`} /> Acquired Artworks & Orders
                 </h3>
-                <span className="text-xs text-slate-400 font-semibold">{orders.length} Order(s)</span>
+                <span className={`text-xs font-semibold ${theme.mutedText}`}>{orders.length} Order(s)</span>
               </div>
 
               {orders.length === 0 ? (
-                <p className="text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center">
+                <p className={`text-xs border rounded-2xl p-4 text-center ${theme.innerBox} ${theme.mutedText}`}>
                   No purchases yet. Explore the Art Gallery and use Buy Now or Cart to acquire original works.
                 </p>
               ) : (
@@ -1826,22 +2198,22 @@ export default function App() {
                   {orders.map((ord) => (
                     <div
                       key={ord.orderId}
-                      className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      className={`border rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${theme.innerBox}`}
                     >
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-xs font-bold text-slate-100">{ord.orderId}</span>
-                          <span className="text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                          <span className={`font-mono text-xs font-bold ${theme.heading}`}>{ord.orderId}</span>
+                          <span className={`text-[10px] font-bold border px-2 py-0.5 rounded-full ${theme.verifiedBadge}`}>
                             {ord.paymentMethodLabel}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-400">
+                        <p className={`text-xs ${theme.mutedText}`}>
                           {ord.items.map((i) => `${i.title} (×${i.quantity})`).join(', ')}
                         </p>
-                        <p className="text-[11px] text-slate-500">{ord.paidAt} · UTR: {ord.utrNumber}</p>
+                        <p className={`text-[11px] ${theme.mutedText}`}>{ord.paidAt} · UTR: {ord.utrNumber}</p>
                       </div>
                       <div className="text-right shrink-0">
-                        <div className="text-base font-black text-amber-400 tabular-nums">
+                        <div className={`text-base font-black tabular-nums ${theme.accentText}`}>
                           {formatPrice(ord.totalAmount)}
                         </div>
                         <button
@@ -1850,7 +2222,7 @@ export default function App() {
                             setLatestReceipt(ord);
                             setActiveTab('payment-success');
                           }}
-                          className="text-[11px] text-amber-400 hover:underline font-semibold"
+                          className={`text-[11px] hover:underline font-semibold ${theme.accentText}`}
                         >
                           View Receipt
                         </button>
@@ -1867,42 +2239,42 @@ export default function App() {
         {activeTab === 'future' && (
           <div className="space-y-6">
             <div>
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">ArtisanHub Platform Roadmap</h2>
-              <p className="text-xs sm:text-sm text-slate-400 mt-1">Upcoming hyper-local modules designed to empower neighborhood creator economies</p>
+              <h2 className={`text-2xl sm:text-3xl font-extrabold tracking-tight ${theme.heading}`}>ArtisanHub Platform Roadmap</h2>
+              <p className={`text-xs sm:text-sm mt-1 ${theme.mutedText}`}>Upcoming hyper-local modules designed to empower neighborhood creator economies</p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-              <div className="bg-slate-900/90 border border-slate-800 p-6 rounded-3xl space-y-3 shadow-xl">
-                <div className="w-10 h-10 bg-purple-500/10 text-purple-400 rounded-xl flex items-center justify-center font-bold text-xs border border-purple-500/20">
+              <div className={`border p-6 rounded-3xl space-y-3 shadow-xl ${theme.card}`}>
+                <div className="w-10 h-10 bg-purple-500/10 text-purple-500 rounded-xl flex items-center justify-center font-bold text-xs border border-purple-500/20">
                   AR
                 </div>
-                <h3 className="font-bold text-base text-slate-100">AR Room Visualizer</h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
+                <h3 className={`font-bold text-base ${theme.heading}`}>AR Room Visualizer</h3>
+                <p className={`text-xs leading-relaxed ${theme.mutedText}`}>
                   Patrons preview canvas dimensions and frame finishes on their living room wall in live scale before confirming commissions.
                 </p>
-                <span className="inline-block text-[10px] font-bold bg-slate-800 text-slate-400 px-2.5 py-0.5 rounded-md">Phase 2</span>
+                <span className={`inline-block text-[10px] font-bold px-2.5 py-0.5 rounded-md border ${theme.innerBox} ${theme.mutedText}`}>Phase 2</span>
               </div>
 
-              <div className="bg-slate-900/90 border border-slate-800 p-6 rounded-3xl space-y-3 shadow-xl">
-                <div className="w-10 h-10 bg-amber-500/10 text-amber-400 rounded-xl flex items-center justify-center font-bold text-xs border border-amber-500/20">
+              <div className={`border p-6 rounded-3xl space-y-3 shadow-xl ${theme.card}`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xs border ${theme.accentTag}`}>
                   WS
                 </div>
-                <h3 className="font-bold text-base text-slate-100">Neighborhood Masterclasses</h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  Weekend pottery, oil painting, and heritage sculpting workshops hosted directly at the artist's local studio space.
+                <h3 className={`font-bold text-base ${theme.heading}`}>Neighborhood Masterclasses</h3>
+                <p className={`text-xs leading-relaxed ${theme.mutedText}`}>
+                  Weekend pottery, oil painting, and heritage sculpting workshops hosted directly at the artist&apos;s local studio space.
                 </p>
-                <span className="inline-block text-[10px] font-bold bg-slate-800 text-slate-400 px-2.5 py-0.5 rounded-md">Phase 3</span>
+                <span className={`inline-block text-[10px] font-bold px-2.5 py-0.5 rounded-md border ${theme.innerBox} ${theme.mutedText}`}>Phase 3</span>
               </div>
 
-              <div className="bg-slate-900/90 border border-slate-800 p-6 rounded-3xl space-y-3 shadow-xl">
-                <div className="w-10 h-10 bg-emerald-500/10 text-emerald-400 rounded-xl flex items-center justify-center font-bold text-xs border border-emerald-500/20">
+              <div className={`border p-6 rounded-3xl space-y-3 shadow-xl ${theme.card}`}>
+                <div className="w-10 h-10 bg-emerald-500/10 text-emerald-500 rounded-xl flex items-center justify-center font-bold text-xs border border-emerald-500/20">
                   NFT
                 </div>
-                <h3 className="font-bold text-base text-slate-100">Digital Authenticity NFC</h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
+                <h3 className={`font-bold text-base ${theme.heading}`}>Digital Authenticity NFC</h3>
+                <p className={`text-xs leading-relaxed ${theme.mutedText}`}>
                   Cryptographically signed NFC certificates embedded into physical canvas frames to guarantee provenance and resale royalties.
                 </p>
-                <span className="inline-block text-[10px] font-bold bg-slate-800 text-slate-400 px-2.5 py-0.5 rounded-md">Phase 4</span>
+                <span className={`inline-block text-[10px] font-bold px-2.5 py-0.5 rounded-md border ${theme.innerBox} ${theme.mutedText}`}>Phase 4</span>
               </div>
             </div>
           </div>
@@ -1910,24 +2282,28 @@ export default function App() {
 
         {/* ================= PAGE: ORDER SUMMARY & PAYMENT METHOD ================= */}
         {activeTab === 'checkout' && (
-          <CheckoutPage
-            items={checkoutItems}
-            currentUser={currentUser}
-            isCartCheckout={checkoutFromCart}
-            onUpdateQty={handleUpdateCartQty}
-            onRemoveItem={handleRemoveFromCart}
-            onBack={() => setActiveTab('marketplace')}
-            onPaymentSuccess={handlePaymentSuccess}
-          />
+          <div className={isArtist ? 'bg-slate-950 text-slate-100 rounded-3xl p-4 sm:p-8 border border-stone-300 shadow-2xl' : ''}>
+            <CheckoutPage
+              items={checkoutItems}
+              currentUser={currentUser}
+              isCartCheckout={checkoutFromCart}
+              onUpdateQty={handleUpdateCartQty}
+              onRemoveItem={handleRemoveFromCart}
+              onBack={() => setActiveTab('marketplace')}
+              onPaymentSuccess={handlePaymentSuccess}
+            />
+          </div>
         )}
 
         {/* ================= PAGE: PAYMENT SUCCESSFUL ================= */}
         {activeTab === 'payment-success' && (
-          <PaymentSuccessPage
-            receipt={latestReceipt}
-            onBackToGallery={() => setActiveTab('marketplace')}
-            onViewProfile={() => setActiveTab('profile')}
-          />
+          <div className={isArtist ? 'bg-slate-950 text-slate-100 rounded-3xl p-4 sm:p-8 border border-stone-300 shadow-2xl' : ''}>
+            <PaymentSuccessPage
+              receipt={latestReceipt}
+              onBackToGallery={() => setActiveTab('marketplace')}
+              onViewProfile={() => setActiveTab('profile')}
+            />
+          </div>
         )}
           </>
         )}
@@ -1935,31 +2311,31 @@ export default function App() {
 
       {/* ================= MODAL: QUICK-VIEW ARTWORK ================= */}
       {quickViewProduct && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+        <div className={`fixed inset-0 z-50 backdrop-blur-md flex items-center justify-center p-4 ${theme.modalBackdrop}`}>
+          <div className={`border rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200 ${theme.modalShell}`}>
             <div className="relative h-72 sm:h-80 bg-slate-950">
-              <img 
-                src={quickViewProduct.imageUrl || '/art-fallback.svg'} 
-                alt={quickViewProduct.title} 
+              <img
+                src={quickViewProduct.imageUrl || '/art-fallback.svg'}
+                alt={quickViewProduct.title}
                 onError={(e) => {
                   e.currentTarget.onerror = null;
                   e.currentTarget.src = '/art-fallback.svg';
                 }}
                 className="w-full h-full object-cover"
               />
-              <button 
-                onClick={() => setQuickViewProduct(null)} 
+              <button
+                onClick={() => setQuickViewProduct(null)}
                 className="absolute top-4 right-4 bg-slate-950/80 hover:bg-slate-950 text-slate-300 hover:text-white w-8 h-8 rounded-full flex items-center justify-center border border-white/10 text-sm transition"
               >
                 ✕
               </button>
 
               <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between">
-                <span className="backdrop-blur-md bg-slate-950/80 border border-white/10 text-amber-400 text-xs font-bold px-3 py-1 rounded-xl">
+                <span className={`backdrop-blur-md bg-slate-950/80 border border-white/10 text-xs font-bold px-3 py-1 rounded-xl ${isArtist ? 'text-emerald-300' : 'text-amber-400'}`}>
                   {quickViewProduct.category}
                 </span>
                 <span className="backdrop-blur-md bg-slate-950/80 border border-white/10 text-slate-200 text-xs font-medium px-3 py-1 rounded-xl flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5 text-amber-400" /> {quickViewProduct.location}
+                  <MapPin className={`w-3.5 h-3.5 ${isArtist ? 'text-emerald-300' : 'text-amber-400'}`} /> {quickViewProduct.location}
                 </span>
               </div>
             </div>
@@ -1967,49 +2343,49 @@ export default function App() {
             <div className="p-6 space-y-5">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                 <div>
-                  <h3 className="text-xl font-extrabold text-slate-100">{quickViewProduct.title}</h3>
-                  <p className="text-xs text-slate-400">Created by <span className="text-slate-200 font-semibold">{quickViewProduct.artist}</span></p>
+                  <h3 className={`text-xl font-extrabold ${theme.heading}`}>{quickViewProduct.title}</h3>
+                  <p className={`text-xs ${theme.mutedText}`}>Created by <span className={`font-semibold ${theme.heading}`}>{quickViewProduct.artist}</span></p>
                 </div>
-                <div className="text-2xl font-black text-amber-400 tabular-nums">
+                <div className={`text-2xl font-black tabular-nums ${theme.accentText}`}>
                   {formatPrice(quickViewProduct.price)}
                 </div>
               </div>
 
-              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
+              <p className={`text-xs sm:text-sm leading-relaxed p-4 rounded-2xl border ${theme.innerBox} ${theme.bodyText}`}>
                 {quickViewProduct.description}
               </p>
 
-              <div className="grid grid-cols-2 gap-3 text-xs bg-slate-950 p-3.5 rounded-2xl border border-slate-800/80">
+              <div className={`grid grid-cols-2 gap-3 text-xs p-3.5 rounded-2xl border ${theme.innerBox}`}>
                 <div>
-                  <span className="text-slate-500 block text-[10px] uppercase font-bold">Medium / Materials</span>
-                  <span className="text-slate-200 font-medium">{quickViewProduct.medium}</span>
+                  <span className={`block text-[10px] uppercase font-bold ${theme.mutedText}`}>Medium / Materials</span>
+                  <span className={`font-medium ${theme.heading}`}>{quickViewProduct.medium}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px] uppercase font-bold">Dimensions</span>
-                  <span className="text-slate-200 font-medium tabular-nums">{quickViewProduct.dimensions}</span>
+                  <span className={`block text-[10px] uppercase font-bold ${theme.mutedText}`}>Dimensions</span>
+                  <span className={`font-medium tabular-nums ${theme.heading}`}>{quickViewProduct.dimensions}</span>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
-                <button 
+                <button
                   onClick={() => {
                     const target = quickViewProduct;
                     setQuickViewProduct(null);
                     showNotification(`Inquiry dispatched to artist ${target.artist}! Phone connection opened.`);
                   }}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl text-xs font-bold transition border border-slate-700 flex items-center justify-center gap-1.5"
+                  className={`py-2.5 rounded-xl text-xs font-bold transition border flex items-center justify-center gap-1.5 ${theme.secondaryBtn}`}
                 >
-                  <Phone className="w-3.5 h-3.5 text-amber-400" /> Inquiry
+                  <Phone className={`w-3.5 h-3.5 ${theme.accentText}`} /> Inquiry
                 </button>
-                <button 
+                <button
                   onClick={() => handleAddToCart(quickViewProduct)}
-                  className="bg-slate-950 hover:bg-slate-800 text-slate-200 py-2.5 rounded-xl text-xs font-bold transition border border-slate-700 flex items-center justify-center gap-1.5"
+                  className={`py-2.5 rounded-xl text-xs font-bold transition border flex items-center justify-center gap-1.5 ${theme.secondaryBtn}`}
                 >
-                  <ShoppingCart className="w-3.5 h-3.5 text-amber-400" /> Add to Cart
+                  <ShoppingCart className={`w-3.5 h-3.5 ${theme.accentText}`} /> Add to Cart
                 </button>
-                <button 
+                <button
                   onClick={() => handleBuyNow(quickViewProduct)}
-                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-extrabold transition flex items-center justify-center gap-1.5 shadow-lg shadow-amber-400/20"
+                  className={`py-2.5 rounded-xl text-xs font-extrabold transition flex items-center justify-center gap-1.5 ${theme.accentBtn}`}
                 >
                   <Zap className="w-3.5 h-3.5" /> Buy Now
                 </button>
@@ -2021,25 +2397,25 @@ export default function App() {
 
       {/* ================= MODAL: SHOPPING CART ================= */}
       {isCartOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-lg space-y-5 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3.5">
+        <div className={`fixed inset-0 z-50 backdrop-blur-md flex items-center justify-center p-4 ${theme.modalBackdrop}`}>
+          <div className={`border rounded-3xl p-6 sm:p-7 w-full max-w-lg space-y-5 shadow-2xl ${theme.modalShell}`}>
+            <div className={`flex justify-between items-center border-b pb-3.5 ${theme.divider}`}>
               <div>
-                <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                  <ShoppingCart className="w-5 h-5 text-amber-400" /> Your Art Cart ({totalCartCount})
+                <h3 className={`text-lg font-bold flex items-center gap-2 ${theme.heading}`}>
+                  <ShoppingCart className={`w-5 h-5 ${theme.accentText}`} /> Your Art Cart ({totalCartCount})
                 </h3>
-                <p className="text-xs text-slate-400">Review selected artworks before proceeding to checkout</p>
+                <p className={`text-xs ${theme.mutedText}`}>Review selected artworks before proceeding to checkout</p>
               </div>
-              <button onClick={() => setIsCartOpen(false)} className="text-slate-400 hover:text-white text-sm">✕</button>
+              <button onClick={() => setIsCartOpen(false)} className={`text-sm ${theme.closeBtn}`}>✕</button>
             </div>
 
             {cartItems.length === 0 ? (
               <div className="py-10 text-center space-y-3">
-                <p className="text-xs sm:text-sm text-slate-400">Your cart is currently empty.</p>
+                <p className={`text-xs sm:text-sm ${theme.mutedText}`}>Your cart is currently empty.</p>
                 <button
                   type="button"
                   onClick={() => setIsCartOpen(false)}
-                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-5 py-2.5 rounded-xl text-xs font-extrabold transition"
+                  className={`px-5 py-2.5 rounded-xl text-xs font-extrabold transition ${theme.accentBtn}`}
                 >
                   Explore Artworks
                 </button>
@@ -2053,7 +2429,7 @@ export default function App() {
                     return (
                       <div
                         key={itemId}
-                        className="flex items-center gap-3.5 bg-slate-950 border border-slate-800 p-3 rounded-2xl"
+                        className={`flex items-center gap-3.5 border p-3 rounded-2xl ${theme.innerBox}`}
                       >
                         <img
                           src={item.imageUrl || '/art-fallback.svg'}
@@ -2065,27 +2441,27 @@ export default function App() {
                           className="w-16 h-16 object-cover rounded-xl bg-slate-900 shrink-0"
                         />
                         <div className="flex-1 min-w-0">
-                          <h4 className="text-xs sm:text-sm font-bold text-slate-100 truncate">{item.title}</h4>
-                          <p className="text-[11px] text-slate-400 truncate">By {item.artist}</p>
-                          <p className="text-xs font-black text-amber-400 tabular-nums mt-0.5">
+                          <h4 className={`text-xs sm:text-sm font-bold truncate ${theme.heading}`}>{item.title}</h4>
+                          <p className={`text-[11px] truncate ${theme.mutedText}`}>By {item.artist}</p>
+                          <p className={`text-xs font-black tabular-nums mt-0.5 ${theme.accentText}`}>
                             {formatPrice(item.price * qty)}
                           </p>
                         </div>
 
                         <div className="flex items-center gap-1.5">
-                          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg">
+                          <div className={`flex items-center border rounded-lg ${theme.card}`}>
                             <button
                               type="button"
                               onClick={() => handleUpdateCartQty(itemId, Math.max(1, qty - 1))}
-                              className="p-1 text-slate-400 hover:text-white"
+                              className={`p-1 ${theme.closeBtn}`}
                             >
                               <Minus className="w-3 h-3" />
                             </button>
-                            <span className="px-2 text-xs font-bold text-slate-200 tabular-nums">{qty}</span>
+                            <span className={`px-2 text-xs font-bold tabular-nums ${theme.heading}`}>{qty}</span>
                             <button
                               type="button"
                               onClick={() => handleUpdateCartQty(itemId, qty + 1)}
-                              className="p-1 text-slate-400 hover:text-white"
+                              className={`p-1 ${theme.closeBtn}`}
                             >
                               <Plus className="w-3 h-3" />
                             </button>
@@ -2093,7 +2469,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => handleRemoveFromCart(itemId)}
-                            className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition"
+                            className={`p-1.5 rounded-lg hover:bg-rose-500/10 transition ${isArtist ? 'text-stone-500 hover:text-rose-700' : 'text-slate-500 hover:text-rose-400'}`}
                             title="Remove"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -2104,9 +2480,9 @@ export default function App() {
                   })}
                 </div>
 
-                <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
-                  <span className="text-xs text-slate-400 font-semibold">Cart Subtotal</span>
-                  <span className="text-xl font-black text-amber-400 tabular-nums">
+                <div className={`pt-3 border-t flex items-center justify-between ${theme.divider}`}>
+                  <span className={`text-xs font-semibold ${theme.mutedText}`}>Cart Subtotal</span>
+                  <span className={`text-xl font-black tabular-nums ${theme.accentText}`}>
                     {formatPrice(cartSubtotal)}
                   </span>
                 </div>
@@ -2115,14 +2491,14 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setIsCartOpen(false)}
-                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-bold border border-slate-700"
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold border ${theme.secondaryBtn}`}
                   >
                     Continue Browsing
                   </button>
                   <button
                     type="button"
                     onClick={handleProceedToCartCheckout}
-                    className="flex-1 bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-extrabold shadow-lg shadow-amber-400/20 flex items-center justify-center gap-1.5"
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 ${theme.accentBtn}`}
                   >
                     <Zap className="w-3.5 h-3.5" /> Proceed to Checkout
                   </button>
@@ -2135,36 +2511,36 @@ export default function App() {
 
       {/* ================= MODAL: ADD ARTWORK (ARTIST) ================= */}
       {isAddArtOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-lg space-y-5 shadow-2xl">
+        <div className={`fixed inset-0 z-50 backdrop-blur-md flex items-center justify-center p-4 ${theme.modalBackdrop}`}>
+          <div className={`border rounded-3xl p-6 sm:p-7 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-5 shadow-2xl ${theme.modalShell}`}>
             <div className="flex justify-between items-center">
               <div>
-                <h3 className="text-lg font-bold text-slate-100">List New Original Artwork</h3>
-                <p className="text-xs text-slate-400">Share your craft with art enthusiasts in your neighborhood</p>
+                <h3 className={`text-lg font-bold ${theme.heading}`}>List New Original Artwork</h3>
+                <p className={`text-xs ${theme.mutedText}`}>Share your craft with art enthusiasts in your neighborhood</p>
               </div>
-              <button onClick={() => setIsAddArtOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setIsAddArtOpen(false)} className={theme.closeBtn}>✕</button>
             </div>
 
             <form onSubmit={handleAddArtworkSubmit} className="space-y-4">
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Title of Piece *</label>
-                <input 
-                  required 
-                  type="text" 
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Title of Piece *</label>
+                <input
+                  required
+                  type="text"
                   placeholder="e.g. Dawn at Cubbon Park"
-                  value={newArtForm.title} 
-                  onChange={e => setNewArtForm({...newArtForm, title: e.target.value})} 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                  value={newArtForm.title}
+                  onChange={e => setNewArtForm({...newArtForm, title: e.target.value})}
+                  className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Category *</label>
-                  <select 
-                    value={newArtForm.category} 
-                    onChange={e => setNewArtForm({...newArtForm, category: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Category *</label>
+                  <select
+                    value={newArtForm.category}
+                    onChange={e => setNewArtForm({...newArtForm, category: e.target.value})}
+                    className={`w-full border rounded-xl px-3 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   >
                     <option>Oil Painting</option>
                     <option>Sculpture</option>
@@ -2175,76 +2551,76 @@ export default function App() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Price (₹ INR) *</label>
-                  <input 
-                    required 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Price (₹ INR) *</label>
+                  <input
+                    required
                     min={1}
-                    type="number" 
-                    placeholder="e.g. 8500" 
-                    value={newArtForm.price} 
-                    onChange={e => setNewArtForm({...newArtForm, price: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                    type="number"
+                    placeholder="e.g. 8500"
+                    value={newArtForm.price}
+                    onChange={e => setNewArtForm({...newArtForm, price: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Medium</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Acrylic on Canvas" 
-                    value={newArtForm.medium} 
-                    onChange={e => setNewArtForm({...newArtForm, medium: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Medium</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Acrylic on Canvas"
+                    value={newArtForm.medium}
+                    onChange={e => setNewArtForm({...newArtForm, medium: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Dimensions</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. 24x36 in" 
-                    value={newArtForm.dimensions} 
-                    onChange={e => setNewArtForm({...newArtForm, dimensions: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Dimensions</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 24x36 in"
+                    value={newArtForm.dimensions}
+                    onChange={e => setNewArtForm({...newArtForm, dimensions: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Image URL</label>
-                <input 
-                  type="url" 
-                  placeholder="https://images.unsplash.com/..." 
-                  value={newArtForm.imageUrl} 
-                  onChange={e => setNewArtForm({...newArtForm, imageUrl: e.target.value})} 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Image URL</label>
+                <input
+                  type="url"
+                  placeholder="https://images.unsplash.com/..."
+                  value={newArtForm.imageUrl}
+                  onChange={e => setNewArtForm({...newArtForm, imageUrl: e.target.value})}
+                  className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                 />
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Description & Artisan Backstory</label>
-                <textarea 
-                  rows="3" 
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Description & Artisan Backstory</label>
+                <textarea
+                  rows="3"
                   placeholder="Describe your artistic inspiration, technique, and framing notes..."
-                  value={newArtForm.description} 
-                  onChange={e => setNewArtForm({...newArtForm, description: e.target.value})} 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                  value={newArtForm.description}
+                  onChange={e => setNewArtForm({...newArtForm, description: e.target.value})}
+                  className={`w-full border rounded-xl p-3 text-xs focus:outline-none ${theme.input}`}
                 ></textarea>
               </div>
 
               <div className="flex gap-3 pt-2">
-                <button 
-                  type="button" 
-                  onClick={() => setIsAddArtOpen(false)} 
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-bold border border-slate-700"
+                <button
+                  type="button"
+                  onClick={() => setIsAddArtOpen(false)}
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-bold border ${theme.secondaryBtn}`}
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   disabled={isSubmittingArt}
-                  className="flex-1 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
+                  className={`flex-1 disabled:opacity-50 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 ${theme.accentBtn}`}
                 >
                   {isSubmittingArt ? (
                     <>
@@ -2263,63 +2639,63 @@ export default function App() {
 
       {/* ================= MODAL: POST CUSTOM DEMAND (BUYER) ================= */}
       {isCreateRequestOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-5 shadow-2xl">
+        <div className={`fixed inset-0 z-50 backdrop-blur-md flex items-center justify-center p-4 ${theme.modalBackdrop}`}>
+          <div className={`border rounded-3xl p-6 sm:p-7 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-5 shadow-2xl ${theme.modalShell}`}>
             <div className="flex justify-between items-center">
               <div>
-                <h3 className="text-lg font-bold text-slate-100">Post Custom Art Demand</h3>
-                <p className="text-xs text-slate-400">Describe what you need and receive price quotes from local artists</p>
+                <h3 className={`text-lg font-bold ${theme.heading}`}>Post Custom Art Demand</h3>
+                <p className={`text-xs ${theme.mutedText}`}>Describe what you need and receive price quotes from local artists</p>
               </div>
-              <button type="button" onClick={() => setIsCreateRequestOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button type="button" onClick={() => setIsCreateRequestOpen(false)} className={theme.closeBtn}>✕</button>
             </div>
 
             <form onSubmit={handleCreateRequestSubmit} className="space-y-4">
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Requirement Title *</label>
-                <input 
-                  required 
-                  type="text" 
-                  placeholder="e.g. Modern Minimalist Acrylic on Canvas for Dining Space" 
-                  value={newReqForm.title} 
-                  onChange={e => setNewReqForm({...newReqForm, title: e.target.value})} 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Requirement Title *</label>
+                <input
+                  required
+                  type="text"
+                  placeholder="e.g. Modern Minimalist Acrylic on Canvas for Dining Space"
+                  value={newReqForm.title}
+                  onChange={e => setNewReqForm({...newReqForm, title: e.target.value})}
+                  className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Min Budget (₹) *</label>
-                  <input 
-                    required 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Min Budget (₹) *</label>
+                  <input
+                    required
                     min={1}
-                    type="number" 
-                    placeholder="e.g. 5000" 
-                    value={newReqForm.budgetMin} 
-                    onChange={e => setNewReqForm({...newReqForm, budgetMin: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                    type="number"
+                    placeholder="e.g. 5000"
+                    value={newReqForm.budgetMin}
+                    onChange={e => setNewReqForm({...newReqForm, budgetMin: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Max Budget (₹) *</label>
-                  <input 
-                    required 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Max Budget (₹) *</label>
+                  <input
+                    required
                     min={1}
-                    type="number" 
-                    placeholder="e.g. 15000" 
-                    value={newReqForm.budgetMax} 
-                    onChange={e => setNewReqForm({...newReqForm, budgetMax: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                    type="number"
+                    placeholder="e.g. 15000"
+                    value={newReqForm.budgetMax}
+                    onChange={e => setNewReqForm({...newReqForm, budgetMax: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Category</label>
-                  <select 
-                    value={newReqForm.category} 
-                    onChange={e => setNewReqForm({...newReqForm, category: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Category</label>
+                  <select
+                    value={newReqForm.category}
+                    onChange={e => setNewReqForm({...newReqForm, category: e.target.value})}
+                    className={`w-full border rounded-xl px-3 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   >
                     <option>Modern Art</option>
                     <option>Oil Painting</option>
@@ -2330,40 +2706,40 @@ export default function App() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Target Delivery Date *</label>
-                  <input 
-                    required 
-                    type="date" 
-                    value={newReqForm.deadline} 
-                    onChange={e => setNewReqForm({...newReqForm, deadline: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Target Delivery Date *</label>
+                  <input
+                    required
+                    type="date"
+                    value={newReqForm.deadline}
+                    onChange={e => setNewReqForm({...newReqForm, deadline: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Detailed Specifications</label>
-                <textarea 
-                  rows="3" 
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Detailed Specifications</label>
+                <textarea
+                  rows="3"
                   placeholder="Describe desired dimensions, palette, wall ambient lighting, subject matter..."
-                  value={newReqForm.description} 
-                  onChange={e => setNewReqForm({...newReqForm, description: e.target.value})} 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                  value={newReqForm.description}
+                  onChange={e => setNewReqForm({...newReqForm, description: e.target.value})}
+                  className={`w-full border rounded-xl p-3 text-xs focus:outline-none ${theme.input}`}
                 ></textarea>
               </div>
 
               <div className="flex gap-3 pt-2">
-                <button 
-                  type="button" 
-                  onClick={() => setIsCreateRequestOpen(false)} 
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-bold border border-slate-700"
+                <button
+                  type="button"
+                  onClick={() => setIsCreateRequestOpen(false)}
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-bold border ${theme.secondaryBtn}`}
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   disabled={isSubmittingReq}
-                  className="flex-1 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
+                  className={`flex-1 disabled:opacity-50 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 ${theme.accentBtn}`}
                 >
                   {isSubmittingReq ? (
                     <>
@@ -2382,63 +2758,65 @@ export default function App() {
 
       {/* ================= MODAL: ARTIST SUBMIT BID ================= */}
       {activeBidModalItem && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-md space-y-4 shadow-2xl">
+        <div className={`fixed inset-0 z-50 backdrop-blur-md flex items-center justify-center p-4 ${theme.modalBackdrop}`}>
+          <div className={`border rounded-3xl p-6 sm:p-7 w-full max-w-md space-y-4 shadow-2xl ${theme.modalShell}`}>
             <div>
-              <h3 className="text-lg font-bold text-slate-100">Submit Proposal Quote</h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Bidding for: <span className="text-amber-400 font-semibold">{activeBidModalItem.title}</span>
+              <h3 className={`text-lg font-bold ${theme.heading}`}>Submit Proposal Quote</h3>
+              <p className={`text-xs mt-1 ${theme.mutedText}`}>
+                Bidding for: <span className={`font-semibold ${theme.accentText}`}>{activeBidModalItem.title}</span>
               </p>
             </div>
-            
+
             <form onSubmit={handleBidSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Your Price (₹) *</label>
-                  <input 
-                    required 
-                    type="number" 
-                    placeholder="e.g. 11000" 
-                    value={bidForm.amount} 
-                    onChange={e => setBidForm({...bidForm, amount: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Your Price (₹) *</label>
+                  <input
+                    required
+                    min={1}
+                    type="number"
+                    placeholder="e.g. 11000"
+                    value={bidForm.amount}
+                    onChange={e => setBidForm({...bidForm, amount: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Estimated Days *</label>
-                  <input 
-                    required 
-                    type="number" 
-                    placeholder="e.g. 7" 
-                    value={bidForm.daysEst} 
-                    onChange={e => setBidForm({...bidForm, daysEst: e.target.value})} 
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400" 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Estimated Days *</label>
+                  <input
+                    required
+                    min={1}
+                    type="number"
+                    placeholder="e.g. 7"
+                    value={bidForm.daysEst}
+                    onChange={e => setBidForm({...bidForm, daysEst: e.target.value})}
+                    className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none ${theme.input}`}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Proposal & Craftsmanship Concept</label>
-                <textarea 
-                  rows="3" 
-                  placeholder="Explain your approach, techniques, pigment grade, and milestones..." 
-                  value={bidForm.proposal} 
-                  onChange={e => setBidForm({...bidForm, proposal: e.target.value})} 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Proposal & Craftsmanship Concept</label>
+                <textarea
+                  rows="3"
+                  placeholder="Explain your approach, techniques, pigment grade, and milestones..."
+                  value={bidForm.proposal}
+                  onChange={e => setBidForm({...bidForm, proposal: e.target.value})}
+                  className={`w-full border rounded-xl p-3 text-xs focus:outline-none ${theme.input}`}
                 ></textarea>
               </div>
 
               <div className="flex gap-3 pt-2">
-                <button 
-                  type="button" 
-                  onClick={() => setActiveBidModalItem(null)} 
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-bold border border-slate-700"
+                <button
+                  type="button"
+                  onClick={() => setActiveBidModalItem(null)}
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-bold border ${theme.secondaryBtn}`}
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
-                  className="flex-1 bg-amber-400 hover:bg-amber-300 text-slate-950 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-amber-400/20"
+                <button
+                  type="submit"
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-bold ${theme.accentBtn}`}
                 >
                   Send Proposal
                 </button>
@@ -2450,29 +2828,29 @@ export default function App() {
 
       {/* ================= MODAL: 2FA PHONE OTP AUTH ================= */}
       {isAuthModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 w-full max-w-sm space-y-5 shadow-2xl">
+        <div className={`fixed inset-0 z-50 backdrop-blur-md flex items-center justify-center p-4 ${theme.modalBackdrop}`}>
+          <div className={`border rounded-3xl p-6 sm:p-7 w-full max-w-sm space-y-5 shadow-2xl ${theme.modalShell}`}>
             <div className="flex justify-between items-center">
-              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                <Shield className="w-4 h-4 text-emerald-400" /> Account Security & OTP
+              <h3 className={`text-base font-bold flex items-center gap-2 ${theme.heading}`}>
+                <Shield className="w-4 h-4 text-emerald-500" /> Account Security & OTP
               </h3>
-              <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-500 hover:text-white text-xs">✕</button>
+              <button onClick={() => setIsAuthModalOpen(false)} className={`text-xs ${theme.closeBtn}`}>✕</button>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Mobile Phone Number</label>
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Mobile Phone Number</label>
                 <div className="flex gap-2">
-                  <input 
-                    type="tel" 
-                    value={loginPhone || currentUser.phone} 
+                  <input
+                    type="tel"
+                    value={loginPhone || currentUser.phone}
                     onChange={e => setLoginPhone(e.target.value)}
-                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                    className={`flex-1 border rounded-xl px-3 py-2 text-xs focus:outline-none ${theme.input}`}
                   />
-                  <button 
+                  <button
                     type="button"
                     onClick={() => { setOtpSent(true); showNotification("Verification code sent to mobile!"); }}
-                    className="bg-slate-800 hover:bg-slate-700 text-amber-400 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-700 transition"
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition ${theme.secondaryBtn} ${theme.accentText}`}
                   >
                     Send OTP
                   </button>
@@ -2481,37 +2859,43 @@ export default function App() {
 
               {otpSent && (
                 <div className="animate-in fade-in">
-                  <label className="text-xs text-slate-400 font-semibold block mb-1">Enter 4-Digit OTP Code</label>
-                  <input 
-                    type="text" 
-                    placeholder="• • • •" 
+                  <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Enter 4-Digit OTP Code</label>
+                  <input
+                    type="text"
+                    placeholder="• • • •"
                     maxLength={4}
                     value={otpCode}
                     onChange={e => setOtpCode(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 tracking-widest text-center font-mono focus:outline-none focus:border-amber-400"
+                    className={`w-full border rounded-xl px-3 py-2 text-xs tracking-widest text-center font-mono focus:outline-none ${theme.input}`}
                   />
                 </div>
               )}
 
               <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1">Password</label>
-                <input 
-                  type="password" 
+                <label className={`text-xs font-semibold block mb-1 ${theme.mutedText}`}>Password</label>
+                <input
+                  type="password"
                   placeholder="••••••••"
                   value={loginPassword}
                   onChange={e => setLoginPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                  className={`w-full border rounded-xl px-3 py-2 text-xs focus:outline-none ${theme.input}`}
                 />
               </div>
 
-              <button 
+              <button
                 type="button"
                 onClick={() => {
-                  if (loginPhone) setCurrentUser(prev => ({ ...prev, phone: loginPhone }));
+                  if (loginPhone) {
+                    const updated = { ...currentUser, phone: loginPhone.trim() };
+                    setCurrentUser(updated);
+                    try {
+                      localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
+                    } catch {}
+                  }
                   setIsAuthModalOpen(false);
                   showNotification("Phone Number Verified & 2FA Confirmed!");
                 }}
-                className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 py-2.5 rounded-xl text-xs font-bold transition shadow-lg shadow-emerald-500/20"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-xl text-xs font-bold transition shadow-lg shadow-emerald-600/20"
               >
                 Verify & Save Identity
               </button>
@@ -2521,11 +2905,11 @@ export default function App() {
       )}
 
       {/* FOOTER */}
-      <footer className="mt-16 border-t border-slate-800/80 bg-slate-950 py-8 px-4 sm:px-8 text-center text-xs text-slate-500 space-y-2">
-        <p className="flex items-center justify-center gap-1.5 text-slate-400 font-medium">
-          ArtisanHub <span className="text-slate-600">·</span> Empowering Hyper-Local Creators & Discerning Art Patrons
+      <footer className={`mt-16 border-t py-8 px-4 sm:px-8 text-center text-xs space-y-2 transition-colors duration-300 ${theme.footer}`}>
+        <p className={`flex items-center justify-center gap-1.5 font-medium ${theme.bodyText}`}>
+          {isArtist ? 'ArtisanStudio' : 'ArtisanHub'} <span className={theme.mutedText}>·</span> Empowering Hyper-Local Creators & Discerning Art Patrons
         </p>
-        <p className="text-[11px] text-slate-600">
+        <p className={`text-[11px] ${theme.mutedText}`}>
           Built with React 19 & Tailwind CSS v4 · All rights reserved.
         </p>
       </footer>

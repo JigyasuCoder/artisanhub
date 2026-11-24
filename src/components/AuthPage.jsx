@@ -530,7 +530,8 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
       try {
         const res = await fetch(`${apiBaseUrl}/auth/register`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ArtisanHub' },
           body: JSON.stringify(payload)
         });
 
@@ -547,7 +548,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           setIsLoading(false);
           setSuccessMessage('Account created and verified! Signing you in...');
           setTimeout(() => {
-            onAuthSuccess(data.user);
+            onAuthSuccess(data.user, data.token || '');
           }, 600);
           return;
         } else {
@@ -571,7 +572,8 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
       try {
         const res = await fetch(`${apiBaseUrl}/auth/login`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ArtisanHub' },
           body: JSON.stringify({
             phone: payload.phone,
             email: payload.email,
@@ -592,7 +594,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           setIsLoading(false);
           setSuccessMessage('Credentials verified! Welcome back.');
           setTimeout(() => {
-            onAuthSuccess(data.user);
+            onAuthSuccess(data.user, data.token || '');
           }, 400);
           return;
         } else {
@@ -622,11 +624,11 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
     }
   };
 
-  // Quick Demo Logins
-  const handleQuickDemoLogin = (demoRole) => {
+  // Quick Demo Logins (issues real backend session token + cookie)
+  const handleQuickDemoLogin = async (demoRole) => {
     setIsLoading(true);
     setErrorMessage('');
-    const demoUser = {
+    const fallbackDemoUser = {
       id: demoRole === 'artist' ? 'usr-art-1' : 'usr-101',
       name: demoRole === 'artist' ? 'Rohan Verma' : 'Ananya Sharma',
       role: demoRole,
@@ -639,9 +641,32 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
         : 'Passionate local art collector focusing on contemporary Indian acrylics and traditional handmade pottery.',
       joinedDate: 'March 2024'
     };
-    saveLocalAccount(demoUser);
+
+    try {
+      const res = await fetch(`${apiBaseUrl}/auth/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ArtisanHub' },
+        body: JSON.stringify({
+          email: fallbackDemoUser.email,
+          password: demoRole === 'artist' ? 'artist123' : 'buyer123',
+          role: demoRole
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.user) {
+        saveLocalAccount(data.user);
+        onAuthSuccess(data.user, data.token || '');
+        setIsLoading(false);
+        return;
+      }
+    } catch {
+      // fallback to local demo profile only if server unreachable
+    }
+
+    saveLocalAccount(fallbackDemoUser);
     setTimeout(() => {
-      onAuthSuccess(demoUser);
+      onAuthSuccess(fallbackDemoUser, '');
       setIsLoading(false);
     }, 300);
   };

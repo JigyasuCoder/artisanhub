@@ -1,5 +1,5 @@
 import express, { NextFunction, Request, Response } from 'express';
-import cors from 'cors';
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -12,8 +12,10 @@ dotenv.config();
 mongoose.set('bufferCommands', false);
 
 const app = express();
-const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_artisanhub_key_123!';
+app.set('trust proxy', 1);
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 const MONGO_URI = (process.env.MONGO_URI || '').trim();
+const SESSION_COOKIE_NAME = 'artisanhub_token';
 
 function cleanEnvVal(val?: string): string {
   return (val || '').trim().replace(/^(['"])(.*)\1$/, '$2').trim();
@@ -42,8 +44,144 @@ function getMsg91Config() {
   return { widgetId, tokenAuth, authkey };
 }
 
-app.use(cors());
 app.use(express.json());
+
+interface AuthUser {
+  id: string;
+  name: string;
+  role: string;
+}
+
+function parseCookie(cookieHeader: string | undefined, name: string): string {
+  if (!cookieHeader) return '';
+  const parts = cookieHeader.split(';');
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    if (key === name) {
+      try {
+        return decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        return part.slice(idx + 1).trim();
+      }
+    }
+  }
+  return '';
+}
+
+function signSessionToken(user: { id: string; name: string; role: string }): string {
+  return jwt.sign(
+    { id: String(user.id), name: String(user.name || ''), role: String(user.role || 'buyer') },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+}
+
+function setAuthCookie(res: Response, req: Request, token: string) {
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  const parts = [
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    'HttpOnly',
+    'Path=/',
+    'Max-Age=604800'
+  ];
+  if (isHttps) {
+    parts.push('Secure', 'SameSite=None', 'Partitioned');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearAuthCookie(res: Response, req: Request) {
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  const parts = [
+    `${SESSION_COOKIE_NAME}=`,
+    'HttpOnly',
+    'Path=/',
+    'Max-Age=0'
+  ];
+  if (isHttps) {
+    parts.push('Secure', 'SameSite=None', 'Partitioned');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function verifyMutationOrigin(req: Request): boolean {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return true;
+  if (req.headers['x-requested-with']) return true;
+  const origin = req.headers.origin;
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString().split(',')[0].trim();
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+async function getAuthenticatedUser(req: Request): Promise<AuthUser | null> {
+  const authHeader = req.headers.authorization || '';
+  let token = '';
+  let fromCookie = false;
+
+  if (authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  } else {
+    token = parseCookie(req.headers.cookie, SESSION_COOKIE_NAME);
+    fromCookie = Boolean(token);
+  }
+
+  if (!token) return null;
+  if (fromCookie && !verifyMutationOrigin(req)) return null;
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { id?: string; name?: string; role?: string };
+    if (!decoded?.id) return null;
+
+    const uid = String(decoded.id);
+    if (uid === 'usr-101' || uid === 'usr-art-1') {
+      const storedDemo = demoProfileOverrides.get(uid);
+      return {
+        id: uid,
+        name: storedDemo?.name || decoded.name || (uid === 'usr-art-1' ? 'Rohan Verma' : 'Ananya Sharma'),
+        role: decoded.role || (uid === 'usr-art-1' ? 'artist' : 'buyer')
+      };
+    }
+
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      const memUser = memStore.users.find((u) => String(u.id) === uid);
+      return {
+        id: uid,
+        name: memUser?.name || decoded.name || '',
+        role: memUser?.role || decoded.role || 'buyer'
+      };
+    }
+
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      const dbUser = await User.findById(uid).select('name role');
+      if (dbUser) {
+        return {
+          id: uid,
+          name: dbUser.name || decoded.name || '',
+          role: dbUser.role || decoded.role || 'buyer'
+        };
+      }
+    }
+
+    return {
+      id: uid,
+      name: decoded.name || '',
+      role: decoded.role || 'buyer'
+    };
+  } catch {
+    return null;
+  }
+}
 
 const DEFAULT_ARTWORK_IMAGE =
   'https://images.unsplash.com/photo-1547891654-e66ed7ebb968?auto=format&fit=crop&w=800&q=80';
@@ -170,6 +308,7 @@ const SEED_ARTWORKS = [
 
 const SEED_REQUESTS = [
   {
+    buyerId: 'usr-aditya-rao',
     buyerName: 'Aditya Rao',
     title: 'Custom Abstract Canvas for Living Room',
     category: 'Modern Art',
@@ -230,6 +369,8 @@ interface MemUser {
   bio: string;
   isVerified: boolean;
 }
+
+const demoProfileOverrides = new Map<string, { name?: string; bio?: string }>();
 
 const memStore = {
   users: [] as MemUser[],
@@ -795,7 +936,8 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       };
       memStore.users.push(newUser);
 
-      const token = jwt.sign({ id: newUser.id, role: newUser.role }, JWT_SECRET, { expiresIn: '7d' });
+      const token = signSessionToken(newUser);
+      setAuthCookie(res, req, token);
       return res.status(201).json({
         token,
         user: {
@@ -847,7 +989,8 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       isVerified: true
     });
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = signSessionToken({ id: user._id.toString(), name: user.name, role: user.role });
+    setAuthCookie(res, req, token);
     return res.status(201).json({
       token,
       user: {
@@ -890,16 +1033,24 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
     if (isDemoBuyer || isDemoArtist) {
       const demoRole = isDemoArtist ? 'artist' : 'buyer';
+      const demoId = demoRole === 'artist' ? 'usr-art-1' : 'usr-101';
+      const demoOverride = demoProfileOverrides.get(demoId);
       const demoUser = {
-        id: demoRole === 'artist' ? 'usr-art-1' : 'usr-101',
-        name: demoRole === 'artist' ? 'Rohan Verma' : 'Ananya Sharma',
+        id: demoId,
+        name: demoOverride?.name || (demoRole === 'artist' ? 'Rohan Verma' : 'Ananya Sharma'),
         role: demoRole,
         phone: demoRole === 'artist' ? '+91 98450 11223' : '+91 98765 43210',
         email: demoRole === 'artist' ? 'rohan.artist@artisanhub.in' : 'ananya.buyer@artisanhub.in',
         location: demoRole === 'artist' ? 'Indiranagar, Bengaluru' : 'Koramangala, Bengaluru',
+        bio:
+          demoOverride?.bio ??
+          (demoRole === 'artist'
+            ? 'Master oil painter and heritage clay sculptor in Bengaluru with 12+ years of artisanal craft experience.'
+            : 'Passionate local art collector focusing on contemporary Indian acrylics and traditional handmade pottery.'),
         isVerified: true
       };
-      const token = jwt.sign({ id: demoUser.id, role: demoUser.role }, JWT_SECRET, { expiresIn: '7d' });
+      const token = signSessionToken(demoUser);
+      setAuthCookie(res, req, token);
       return res.json({ token, user: demoUser });
     }
 
@@ -927,7 +1078,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         return res.status(401).json({ message: 'Incorrect password. Please verify and try again.' });
       }
 
-      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+      const token = signSessionToken(user);
+      setAuthCookie(res, req, token);
       return res.json({
         token,
         user: {
@@ -975,7 +1127,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return res.status(401).json({ message: 'Incorrect password. Please verify and try again.' });
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = signSessionToken({ id: user._id.toString(), name: user.name, role: user.role });
+    setAuthCookie(res, req, token);
     return res.json({
       token,
       user: {
@@ -992,6 +1145,68 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Login error:', err);
     return res.status(500).json({ message: err.message || 'Login failed' });
+  }
+});
+
+app.get('/api/auth/me', async (req: Request, res: Response) => {
+  const authUser = await getAuthenticatedUser(req);
+  if (!authUser) {
+    return res.status(401).json({ message: 'Not authenticated' });
+  }
+  return res.json({ user: authUser });
+});
+
+app.post('/api/auth/logout', (req: Request, res: Response) => {
+  clearAuthCookie(res, req);
+  return res.json({ ok: true });
+});
+
+app.patch('/api/auth/profile', async (req: Request, res: Response) => {
+  try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ message: 'Please sign in to update your profile.' });
+    }
+
+    const nextName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const hasBio = typeof req.body?.bio === 'string';
+    const nextBio = hasBio ? req.body.bio.trim() : undefined;
+
+    if (req.body?.name !== undefined && !nextName) {
+      return res.status(400).json({ message: 'Display name cannot be empty.' });
+    }
+
+    const updatedName = nextName || authUser.name;
+
+    if (authUser.id === 'usr-101' || authUser.id === 'usr-art-1') {
+      const prev = demoProfileOverrides.get(authUser.id) || {};
+      demoProfileOverrides.set(authUser.id, {
+        name: updatedName,
+        bio: hasBio ? nextBio : prev.bio
+      });
+    } else {
+      const ready = await ensureMongoReady();
+      if (!ready) {
+        const memUser = memStore.users.find((u) => String(u.id) === authUser.id);
+        if (memUser) {
+          memUser.name = updatedName;
+          if (hasBio && nextBio !== undefined) memUser.bio = nextBio;
+        }
+      } else if (mongoose.Types.ObjectId.isValid(authUser.id)) {
+        const updateFields: Record<string, string> = { name: updatedName };
+        if (hasBio && nextBio !== undefined) updateFields.bio = nextBio;
+        await User.findByIdAndUpdate(authUser.id, updateFields);
+      }
+    }
+
+    const refreshedToken = signSessionToken({ id: authUser.id, name: updatedName, role: authUser.role });
+    setAuthCookie(res, req, refreshedToken);
+    return res.json({
+      token: refreshedToken,
+      user: { id: authUser.id, name: updatedName, role: authUser.role, bio: nextBio }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message || 'Failed to update profile' });
   }
 });
 
@@ -1148,6 +1363,7 @@ app.get('/api/custom-requests', async (_req: Request, res: Response) => {
     const mapped = requests.map(r => ({
       id: r._id.toString(),
       _id: r._id.toString(),
+      buyerId: r.buyerId || '',
       buyerName: r.buyerName,
       title: r.title,
       category: r.category,
@@ -1173,6 +1389,11 @@ app.get('/api/custom-requests', async (_req: Request, res: Response) => {
 
 app.post('/api/custom-requests', async (req: Request, res: Response) => {
   try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ message: 'Please sign in to post a custom demand.' });
+    }
+
     const {
       buyerName,
       title,
@@ -1195,7 +1416,8 @@ app.post('/api/custom-requests', async (req: Request, res: Response) => {
     }
 
     const payload = {
-      buyerName: String(buyerName || 'Art Patron').trim(),
+      buyerId: String(authUser.id),
+      buyerName: authUser.name || String(buyerName || 'Art Patron').trim(),
       title: cleanTitle,
       category: String(category || 'Modern Art').trim(),
       budgetMin: minBudget,
@@ -1237,16 +1459,25 @@ app.post('/api/custom-requests', async (req: Request, res: Response) => {
 
 app.post('/api/bids', async (req: Request, res: Response) => {
   try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ message: 'Please sign in to submit a price proposal.' });
+    }
+
     const { requestId, artistName, amount, daysEst, proposal } = req.body;
+    if (typeof requestId !== 'string' || !requestId.trim()) {
+      return res.status(400).json({ message: 'Valid request ID is required' });
+    }
     if (!Number(amount) || Number(amount) <= 0 || !Number(daysEst) || Number(daysEst) <= 0) {
       return res.status(400).json({ message: 'Valid bid amount and estimated days are required' });
     }
     const bidObj = {
       id: `bid-${Date.now()}`,
-      artistName: artistName || 'Local Artisan',
+      artistId: String(authUser.id),
+      artistName: authUser.name || (typeof artistName === 'string' && artistName.trim()) || 'Local Artisan',
       amount: Number(amount),
       daysEst: Number(daysEst),
-      proposal: proposal || '',
+      proposal: typeof proposal === 'string' ? proposal.trim() : '',
       status: 'Pending',
       timestamp: 'Just now'
     };
@@ -1280,7 +1511,22 @@ app.post('/api/bids', async (req: Request, res: Response) => {
 
 app.patch('/api/custom-requests/:reqId/bids/:bidId/accept', async (req: Request, res: Response) => {
   try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ message: 'Please sign in to accept a proposal.' });
+    }
+
     const { reqId, bidId } = req.params;
+    const isPosterOfDemand = (customReq: { buyerId?: string; buyerName?: string }) => {
+      if (customReq.buyerId && String(customReq.buyerId).trim()) {
+        return String(customReq.buyerId).trim() === String(authUser.id).trim();
+      }
+      return (
+        Boolean(customReq.buyerName && authUser.name) &&
+        customReq.buyerName!.trim().toLowerCase() === authUser.name.trim().toLowerCase()
+      );
+    };
+
     const ready = await ensureMongoReady();
     if (!ready) {
       if (MONGO_URI) {
@@ -1288,10 +1534,26 @@ app.patch('/api/custom-requests/:reqId/bids/:bidId/accept', async (req: Request,
       }
       const customReq = memStore.requests.find((r) => r.id === reqId || r._id === reqId);
       if (!customReq) return res.status(404).json({ message: 'Request not found' });
+
+      if (!isPosterOfDemand(customReq)) {
+        return res.status(403).json({
+          message: `Only ${customReq.buyerName || 'the user who posted this demand'} can accept price proposals for it.`
+        });
+      }
+
+      if (customReq.status !== 'open') {
+        return res.status(409).json({ message: 'A proposal has already been accepted for this demand.' });
+      }
+
+      const targetBid = (customReq.bids || []).find((b: any) => String(b.id) === String(bidId));
+      if (!targetBid) {
+        return res.status(404).json({ message: 'Proposal not found' });
+      }
+
       customReq.status = 'in-progress';
       customReq.bids = (customReq.bids || []).map((b: any) => ({
         ...b,
-        status: b.id === bidId ? 'Accepted' : b.status === 'Accepted' ? 'Accepted' : 'Pending'
+        status: String(b.id) === String(bidId) ? 'Accepted' : b.status === 'Accepted' ? 'Accepted' : 'Pending'
       }));
       return res.json({ status: customReq.status, bids: customReq.bids });
     }
@@ -1303,10 +1565,25 @@ app.patch('/api/custom-requests/:reqId/bids/:bidId/accept', async (req: Request,
     const customReq = await CustomRequest.findById(reqId);
     if (!customReq) return res.status(404).json({ message: 'Request not found' });
 
+    if (!isPosterOfDemand(customReq)) {
+      return res.status(403).json({
+        message: `Only ${customReq.buyerName || 'the user who posted this demand'} can accept price proposals for it.`
+      });
+    }
+
+    if (customReq.status !== 'open') {
+      return res.status(409).json({ message: 'A proposal has already been accepted for this demand.' });
+    }
+
+    const targetBid = (customReq.bids || []).find((b: any) => String(b.id) === String(bidId));
+    if (!targetBid) {
+      return res.status(404).json({ message: 'Proposal not found' });
+    }
+
     customReq.status = 'in-progress';
     customReq.bids = (customReq.bids || []).map((b: any) => ({
       ...(b.toObject?.() || b),
-      status: b.id === bidId ? 'Accepted' : b.status === 'Accepted' ? 'Accepted' : 'Pending'
+      status: String(b.id) === String(bidId) ? 'Accepted' : b.status === 'Accepted' ? 'Accepted' : 'Pending'
     }));
     await customReq.save();
 
