@@ -745,6 +745,17 @@ export default function App() {
     );
   };
 
+  const isBidOwner = (bid) => {
+    if (!currentUser || !bid) return false;
+    if (bid.artistId && String(bid.artistId).trim()) {
+      return String(bid.artistId).trim() === String(currentUser.id || '').trim();
+    }
+    return (
+      Boolean(bid.artistName && currentUser.name) &&
+      bid.artistName.trim().toLowerCase() === currentUser.name.trim().toLowerCase()
+    );
+  };
+
   // Submit custom demand request -> Persists to backend
   const handleCreateRequestSubmit = async (e) => {
     e.preventDefault();
@@ -922,6 +933,65 @@ export default function App() {
       return updated;
     });
     showNotification(`Proposal from ${artistName} accepted! Collaboration initiated.`);
+  };
+
+  // Artist deletes their own pending bid before buyer accepts
+  const handleDeleteBid = async (reqId, bidId) => {
+    const targetReq = buyerRequests.find((r) => (r.id || r._id) === reqId);
+    const targetBid = targetReq?.bids?.find((b) => String(b.id || b._id || '') === String(bidId));
+    if (!targetReq || !targetBid) return;
+
+    if (!isBidOwner(targetBid)) {
+      showNotification('Only the artist who submitted this proposal can delete it.');
+      return;
+    }
+
+    if (targetReq.status !== 'open' || targetBid.status === 'Accepted') {
+      showNotification('Cannot delete a bid after a proposal has been accepted.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/custom-requests/${reqId}/bids/${bidId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: getAuthHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        showNotification(data.message || 'Please sign in again to delete your bid.');
+        return;
+      }
+
+      if (!res.ok) {
+        showNotification(data.message || 'Could not delete bid. Please try again.');
+        return;
+      }
+
+      setBuyerRequests((prev) => {
+        const updated = prev.map((req) => {
+          const targetId = req.id || req._id;
+          if (targetId === reqId) {
+            const nextBids = Array.isArray(data.bids)
+              ? data.bids
+              : (req.bids || []).filter((b) => String(b.id || b._id || '') !== String(bidId));
+            return { ...req, bids: nextBids };
+          }
+          return req;
+        });
+        try {
+          localStorage.setItem('artisanhub_requests_cache', JSON.stringify(updated));
+        } catch (e) {
+          console.warn(e);
+        }
+        return updated;
+      });
+      showNotification('Your price proposal was deleted.');
+    } catch (err) {
+      showNotification(`Network error deleting bid: ${err.message || 'Try again'}`);
+    }
   };
 
   // Handle Auction Bidding -> Persists to MongoDB Atlas
@@ -1848,8 +1918,10 @@ export default function App() {
                         <div className={`relative pl-6 border-l-2 space-y-5 ${theme.timelineLine}`}>
                           {req.bids.map((bid) => {
                             const isAccepted = bid.status === 'Accepted';
+                            const bidId = bid.id || bid._id;
+                            const isMine = isBidOwner(bid);
                             return (
-                              <div key={bid.id} className="relative group">
+                              <div key={bidId} className="relative group">
                                 {/* Timeline Dot */}
                                 <div className={`absolute -left-[31px] top-3 w-3 h-3 rounded-full border-2 transition-all ${theme.timelineDotBorder} ${
                                   isAccepted
@@ -1869,7 +1941,18 @@ export default function App() {
                                         {(bid.artistName || 'A').charAt(0)}
                                       </div>
                                       <div>
-                                        <div className={`font-semibold text-xs sm:text-sm ${theme.heading}`}>{bid.artistName}</div>
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className={`font-semibold text-xs sm:text-sm ${theme.heading}`}>{bid.artistName}</span>
+                                          {isMine && (
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                                              isArtist
+                                                ? 'bg-emerald-700/10 text-emerald-800 border-emerald-700/25'
+                                                : 'bg-sky-500/10 text-sky-300 border-sky-500/30'
+                                            }`}>
+                                              Your Bid
+                                            </span>
+                                          )}
+                                        </div>
                                         <div className={`text-[10px] ${theme.mutedText}`}>{bid.timestamp || 'Recent proposal'}</div>
                                       </div>
                                     </div>
@@ -1902,21 +1985,37 @@ export default function App() {
                                     &ldquo;{bid.proposal}&rdquo;
                                   </p>
 
-                                  {/* Owner-Only Accept Action */}
+                                  {/* Owner Accept & Artist Delete Actions (Only while open & pending) */}
                                   {isOpen && !isAccepted && (
-                                    <div className="flex justify-end pt-1">
+                                    <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                                      {isMine && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteBid(req.id || req._id, bidId)}
+                                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${
+                                            isArtist
+                                              ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-300'
+                                              : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                          }`}
+                                          title="Delete your bid before the buyer accepts a proposal"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" /> Delete Bid
+                                        </button>
+                                      )}
+
                                       {isOwner ? (
                                         <button
-                                          onClick={() => handleAcceptBid(req.id || req._id, bid.id, bid.artistName)}
+                                          type="button"
+                                          onClick={() => handleAcceptBid(req.id || req._id, bidId, bid.artistName)}
                                           className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
                                         >
                                           <Check className="w-3.5 h-3.5" /> Accept Proposal
                                         </button>
-                                      ) : (
+                                      ) : !isMine ? (
                                         <span className={`text-[11px] font-medium ${theme.mutedText}`}>
                                           Only {req.buyerName} can accept this proposal
                                         </span>
-                                      )}
+                                      ) : null}
                                     </div>
                                   )}
                                 </div>

@@ -20,6 +20,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
   const [email, setEmail] = useState('');
   const [location, setLocation] = useState('Indiranagar, Bengaluru');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -32,6 +33,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
   const [copiedPassword, setCopiedPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [resetAccountMissing, setResetAccountMissing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const reinitMsg91Widget = (widgetId, tokenAuth) => {
@@ -166,6 +168,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
     setIsVerified(false);
     setPendingAccessToken('');
     setOtpVerificationToken('');
+    setResetAccountMissing(false);
   };
 
   // Extract readable error message from MSG91 widget error objects
@@ -269,6 +272,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
 
     const shuffled = generated.split('').sort(() => 0.5 - Math.random()).join('');
     setPassword(shuffled);
+    if (authMode === 'reset') setConfirmPassword(shuffled);
     setShowPassword(true);
   };
 
@@ -485,12 +489,13 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
     );
   };
 
-  // Submit Sign In or Register with strict credential & OTP verification
+  // Submit Sign In, Register, or Reset Password with strict credential & OTP verification
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMessage('');
     setSuccessMessage('');
+    setResetAccountMissing(false);
 
     const identifier = verificationMethod === 'phone' ? phone.trim() : email.trim();
 
@@ -500,16 +505,69 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
       return;
     }
 
-    if (!password) {
-      setErrorMessage('Please enter or generate a password.');
+    if ((authMode === 'register' || authMode === 'reset') && (!isVerified || !otpVerificationToken)) {
+      setErrorMessage(
+        `Please send and verify the OTP sent to your ${verificationMethod === 'phone' ? 'mobile number' : 'email'} before ${
+          authMode === 'register' ? 'creating an account' : 'resetting your password'
+        }.`
+      );
       setIsLoading(false);
       return;
     }
 
-    if (authMode === 'register' && (!isVerified || !otpVerificationToken)) {
-      setErrorMessage(`Please send and verify the OTP sent to your ${verificationMethod === 'phone' ? 'phone number' : 'email'} before creating an account.`);
+    if (!password) {
+      setErrorMessage(authMode === 'reset' ? 'Please enter or generate a new password.' : 'Please enter or generate a password.');
       setIsLoading(false);
       return;
+    }
+
+    if (authMode === 'reset') {
+      if (password.length < 6) {
+        setErrorMessage('New password must be at least 6 characters long.');
+        setIsLoading(false);
+        return;
+      }
+      if (password !== confirmPassword) {
+        setErrorMessage('New password and confirmation do not match.');
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${apiBaseUrl}/auth/reset-password`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ArtisanHub' },
+          body: JSON.stringify({
+            phone: verificationMethod === 'phone' ? identifier : undefined,
+            email: verificationMethod === 'email' ? identifier : undefined,
+            role,
+            newPassword: password,
+            otpVerificationToken
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        setIsLoading(false);
+
+        if (res.ok && data?.ok) {
+          setPassword('');
+          setConfirmPassword('');
+          resetOtpState();
+          setAuthMode('signin');
+          setSuccessMessage(data.message || 'Password reset successfully! Please sign in with your new password.');
+          return;
+        }
+
+        if (res.status === 404) {
+          setResetAccountMissing(true);
+        }
+        setErrorMessage(data?.message || `Password reset failed (HTTP ${res.status}).`);
+        return;
+      } catch (netErr) {
+        setIsLoading(false);
+        setErrorMessage(`Cannot reach server (${netErr.message || 'Network error'}). Please try again.`);
+        return;
+      }
     }
 
     const payload = {
@@ -698,12 +756,18 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
             <span>Hyper-Local Artisan Marketplace</span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-black text-slate-100 tracking-tight">
-            {authMode === 'register' ? 'Join ArtisanHub' : 'Sign In to ArtisanHub'}
+            {authMode === 'register'
+              ? 'Join ArtisanHub'
+              : authMode === 'reset'
+                ? 'Reset Password'
+                : 'Sign In to ArtisanHub'}
           </h2>
           <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto">
             {authMode === 'register'
-              ? 'Connect directly with neighborhood creators and art collectors with verified identity.'
-              : 'Sign in to access the hyper-local art marketplace, commissions, and limited auctions.'}
+              ? 'Verify your phone or email via OTP first, then complete your ArtisanHub account.'
+              : authMode === 'reset'
+                ? 'Verify your registered mobile number (or email) with OTP to set a new password.'
+                : 'Sign in to access the hyper-local art marketplace, commissions, and limited auctions.'}
           </p>
 
           {/* Mode Switcher */}
@@ -713,6 +777,9 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                 type="button"
                 onClick={() => {
                   setAuthMode('signin');
+                  setPassword('');
+                  setConfirmPassword('');
+                  resetOtpState();
                   setErrorMessage('');
                   setSuccessMessage('');
                 }}
@@ -726,6 +793,9 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                 type="button"
                 onClick={() => {
                   setAuthMode('register');
+                  setPassword('');
+                  setConfirmPassword('');
+                  resetOtpState();
                   setErrorMessage('');
                   setSuccessMessage('');
                 }}
@@ -735,6 +805,14 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
               >
                 Create Account
               </button>
+              {authMode === 'reset' && (
+                <button
+                  type="button"
+                  className="px-4 py-1.5 rounded-lg text-xs font-bold transition bg-emerald-500 text-slate-950 shadow-sm"
+                >
+                  Reset Password
+                </button>
+              )}
             </div>
           </div>
 
@@ -759,8 +837,23 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
         </div>
 
         {errorMessage && (
-          <div className="bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs px-4 py-3 rounded-xl mb-6">
-            {errorMessage}
+          <div className="bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs px-4 py-3 rounded-xl mb-6 space-y-2">
+            <p>{errorMessage}</p>
+            {resetAccountMissing && authMode === 'reset' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setResetAccountMissing(false);
+                  setErrorMessage('');
+                  setConfirmPassword('');
+                  setAuthMode('register');
+                  setSuccessMessage('Mobile/Email already verified! Complete your profile and password below to register.');
+                }}
+                className="inline-flex items-center gap-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold px-3 py-1.5 rounded-lg text-[11px] transition"
+              >
+                Register Account With This Verified {verificationMethod === 'phone' ? 'Mobile Number' : 'Email'}
+              </button>
+            )}
           </div>
         )}
 
@@ -836,7 +929,12 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                2. {authMode === 'register' ? 'OTP Verification Method *' : 'Sign In Method *'}
+                2.{' '}
+                {authMode === 'register'
+                  ? 'OTP Verification Method *'
+                  : authMode === 'reset'
+                    ? 'Verify Registered Mobile / Email *'
+                    : 'Sign In Method *'}
               </label>
               <div className="flex gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
@@ -889,7 +987,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-amber-400 font-mono"
                     />
                   </div>
-                  {authMode === 'register' && (
+                  {(authMode === 'register' || authMode === 'reset') && (
                     <button
                       type="button"
                       disabled={isSendingOtp || isVerified}
@@ -929,7 +1027,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-amber-400"
                     />
                   </div>
-                  {authMode === 'register' && (
+                  {(authMode === 'register' || authMode === 'reset') && (
                     <button
                       type="button"
                       disabled={isSendingOtp || isVerified}
@@ -953,8 +1051,8 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
               </div>
             )}
 
-            {/* OTP Verification Field (Registration only) */}
-            {authMode === 'register' && otpSent && (
+            {/* OTP Verification Field (Registration & Password Reset) */}
+            {(authMode === 'register' || authMode === 'reset') && otpSent && (
               <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800 space-y-2">
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-slate-400">
@@ -1000,7 +1098,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
               </div>
             )}
 
-            {authMode === 'register' && otpConfig.loaded && !otpConfig.configured && (
+            {(authMode === 'register' || authMode === 'reset') && otpConfig.loaded && !otpConfig.configured && (
               <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
                 MSG91 OTP widget credentials are not yet active on the server (`MSG91_WIDGET_ID` and `MSG91_TOKEN_AUTH`).
               </p>
@@ -1035,20 +1133,57 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
             </div>
           )}
 
-          {/* STEP 3: PASSWORD WITH GENERATOR */}
+          {/* STEP 3: PASSWORD WITH GENERATOR & FORGOT PASSWORD */}
           <div className="space-y-2.5 pt-2">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                3. Password & Security *
+                {authMode === 'reset' ? '3. Set New Password *' : '3. Password & Security *'}
               </label>
-              <button
-                type="button"
-                onClick={generateStrongPassword}
-                className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 transition"
-              >
-                <KeyRound className="w-3.5 h-3.5" />
-                Generate Strong Password
-              </button>
+              <div className="flex items-center gap-3">
+                {authMode === 'signin' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('reset');
+                      setVerificationMethod('phone');
+                      setPassword('');
+                      setConfirmPassword('');
+                      resetOtpState();
+                      setErrorMessage('');
+                      setSuccessMessage('Enter your registered mobile number, verify via OTP, and set a new password.');
+                    }}
+                    className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline underline-offset-2 transition"
+                  >
+                    Forgot Password?
+                  </button>
+                )}
+                {authMode === 'reset' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('signin');
+                      setPassword('');
+                      setConfirmPassword('');
+                      resetOtpState();
+                      setErrorMessage('');
+                      setSuccessMessage('');
+                    }}
+                    className="text-xs font-semibold text-slate-400 hover:text-slate-200 underline underline-offset-2 transition"
+                  >
+                    Back to Sign In
+                  </button>
+                )}
+                {(authMode === 'register' || authMode === 'reset') && (
+                  <button
+                    type="button"
+                    onClick={generateStrongPassword}
+                    className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 transition"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    Generate Strong Password
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Password Input Box */}
@@ -1057,7 +1192,7 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
               <input
                 type={showPassword ? 'text' : 'password'}
                 required
-                placeholder="Enter or generate secure password"
+                placeholder={authMode === 'reset' ? 'Enter or generate new password' : 'Enter or generate secure password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-24 py-2.5 text-xs sm:text-sm text-slate-200 font-mono focus:outline-none focus:border-amber-400"
@@ -1084,6 +1219,20 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
               </div>
             </div>
 
+            {authMode === 'reset' && (
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  placeholder="Confirm new password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-200 font-mono focus:outline-none focus:border-amber-400"
+                />
+              </div>
+            )}
+
             {/* Password Strength Meter */}
             {password && (
               <div className="space-y-1 pt-1">
@@ -1101,23 +1250,42 @@ export default function AuthPage({ onAuthSuccess, onCancel, currentRole = 'buyer
             )}
           </div>
 
+          {/* OTP Gate Banner */}
+          {(authMode === 'register' || authMode === 'reset') && (!isVerified || !otpVerificationToken) && (
+            <div className="bg-amber-400/10 border border-amber-400/30 text-amber-300 text-xs px-4 py-2.5 rounded-xl flex items-center gap-2">
+              <Shield className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                {authMode === 'register'
+                  ? 'Verify your phone or email via OTP in Step 2 to unlock account creation.'
+                  : 'Verify your registered mobile number or email via OTP in Step 2 to reset your password.'}
+              </span>
+            </div>
+          )}
+
           {/* SUBMIT BUTTON */}
-          <div className="pt-4">
+          <div className="pt-2">
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 py-3.5 rounded-2xl text-xs sm:text-sm font-extrabold transition shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
+              disabled={isLoading || ((authMode === 'register' || authMode === 'reset') && (!isVerified || !otpVerificationToken))}
+              className="w-full bg-amber-400 hover:bg-amber-300 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 py-3.5 rounded-2xl text-xs sm:text-sm font-extrabold transition shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
             >
               {isLoading ? (
                 <>
-                  <RefreshCw className="w-4 h-4 animate-spin" /> Verifying Credentials...
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  {authMode === 'reset' ? 'Updating Password...' : 'Verifying Credentials...'}
                 </>
               ) : (
                 <>
                   <Shield className="w-4 h-4 text-slate-950" />
                   {authMode === 'register'
-                    ? `Create ${role === 'artist' ? 'Artist' : 'Buyer'} Account`
-                    : `Sign In as ${role === 'artist' ? 'Artist' : 'Buyer'}`}
+                    ? isVerified && otpVerificationToken
+                      ? `Create ${role === 'artist' ? 'Artist' : 'Buyer'} Account`
+                      : 'Verify OTP to Create Account'
+                    : authMode === 'reset'
+                      ? isVerified && otpVerificationToken
+                        ? 'Reset Password'
+                        : 'Verify OTP to Reset Password'
+                      : `Sign In as ${role === 'artist' ? 'Artist' : 'Buyer'}`}
                 </>
               )}
             </button>

@@ -371,6 +371,23 @@ interface MemUser {
 }
 
 const demoProfileOverrides = new Map<string, { name?: string; bio?: string }>();
+const demoPasswordOverrides = new Map<string, string>();
+const consumedOtpTokens = new Map<string, number>();
+
+function isOtpTokenConsumed(jti?: string): boolean {
+  if (!jti) return false;
+  const now = Date.now();
+  for (const [k, exp] of consumedOtpTokens.entries()) {
+    if (exp < now) consumedOtpTokens.delete(k);
+  }
+  return consumedOtpTokens.has(jti);
+}
+
+function consumeOtpToken(jti?: string) {
+  if (jti) {
+    consumedOtpTokens.set(jti, Date.now() + 20 * 60 * 1000);
+  }
+}
 
 const memStore = {
   users: [] as MemUser[],
@@ -760,7 +777,8 @@ app.post('/api/auth/verify-otp-code', async (req: Request, res: Response) => {
     const otpVerificationToken = jwt.sign(
       {
         otpVerified: true,
-        identifier: verifiedIdentifier
+        identifier: verifiedIdentifier,
+        jti: crypto.randomUUID()
       },
       JWT_SECRET,
       { expiresIn: '15m' }
@@ -827,22 +845,25 @@ app.post('/api/auth/verify-otp-token', async (req: Request, res: Response) => {
 
     const verifiedIdentifier = result.verifiedIdentifier;
 
-    if (expectedIdentifier) {
-      const isEmail = expectedIdentifier.includes('@');
-      const matches = isEmail
-        ? normalizeEmail(verifiedIdentifier) === normalizeEmail(expectedIdentifier)
-        : phoneMatches(verifiedIdentifier, expectedIdentifier);
-      if (!matches) {
-        return res.status(403).json({
-          message: 'Verified OTP identifier does not match the submitted phone number or email.'
-        });
-      }
+    if (!expectedIdentifier) {
+      return res.status(400).json({ message: 'Phone number or email identifier is required.' });
+    }
+
+    const isEmail = expectedIdentifier.includes('@');
+    const matches = isEmail
+      ? normalizeEmail(verifiedIdentifier) === normalizeEmail(expectedIdentifier)
+      : phoneMatches(verifiedIdentifier, expectedIdentifier);
+    if (!matches) {
+      return res.status(403).json({
+        message: 'Verified OTP identifier does not match the submitted phone number or email.'
+      });
     }
 
     const otpVerificationToken = jwt.sign(
       {
         otpVerified: true,
-        identifier: verifiedIdentifier
+        identifier: verifiedIdentifier,
+        jti: crypto.randomUUID()
       },
       JWT_SECRET,
       { expiresIn: '15m' }
@@ -863,8 +884,11 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   try {
     const { phone, email, password, role, name, location, bio, otpVerificationToken } = req.body;
 
-    if (!password) {
+    if (typeof password !== 'string' || !password) {
       return res.status(400).json({ message: 'Password is required' });
+    }
+    if ((phone !== undefined && typeof phone !== 'string') || (email !== undefined && typeof email !== 'string')) {
+      return res.status(400).json({ message: 'Invalid phone or email format' });
     }
     if (!phone && !email) {
       return res.status(400).json({ message: 'Phone or Email is required' });
@@ -872,21 +896,23 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
 
     const normEmail = email ? normalizeEmail(email) : null;
     const cleanPh = phone ? phone.trim() : null;
-    const targetRole = role || 'buyer';
+    const targetRole = typeof role === 'string' && (role === 'artist' || role === 'buyer') ? role : 'buyer';
 
-    if (!otpVerificationToken) {
+    if (typeof otpVerificationToken !== 'string' || !otpVerificationToken) {
       return res.status(403).json({
         message: 'OTP verification is required before creating an account.'
       });
     }
 
+    let verifiedOtpJti: string | undefined;
     try {
       const decoded = jwt.verify(otpVerificationToken, JWT_SECRET) as {
         otpVerified?: boolean;
         identifier?: string;
+        jti?: string;
       };
-      if (!decoded?.otpVerified || !decoded?.identifier) {
-        return res.status(403).json({ message: 'Invalid OTP verification proof.' });
+      if (!decoded?.otpVerified || !decoded?.identifier || isOtpTokenConsumed(decoded.jti)) {
+        return res.status(403).json({ message: 'Invalid or already used OTP verification proof. Please verify OTP again.' });
       }
       const matchesSubmitted = cleanPh
         ? phoneMatches(decoded.identifier, cleanPh)
@@ -898,6 +924,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
           message: 'Verified phone/email does not match registration details. Please re-verify OTP.'
         });
       }
+      verifiedOtpJti = decoded.jti;
     } catch {
       return res.status(403).json({
         message: 'OTP verification expired or invalid. Please verify your OTP again.'
@@ -935,6 +962,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
         isVerified: true
       };
       memStore.users.push(newUser);
+      consumeOtpToken(verifiedOtpJti);
 
       const token = signSessionToken(newUser);
       setAuthCookie(res, req, token);
@@ -988,6 +1016,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       bio: bio || '',
       isVerified: true
     });
+    consumeOtpToken(verifiedOtpJti);
 
     const token = signSessionToken({ id: user._id.toString(), name: user.name, role: user.role });
     setAuthCookie(res, req, token);
@@ -1010,12 +1039,149 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   }
 });
 
+app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
+  try {
+    const { phone, email, role, newPassword, otpVerificationToken } = req.body || {};
+
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ message: 'Please provide a new password with at least 6 characters.' });
+    }
+    if ((phone !== undefined && typeof phone !== 'string') || (email !== undefined && typeof email !== 'string')) {
+      return res.status(400).json({ message: 'Invalid phone or email format.' });
+    }
+    if (!phone && !email) {
+      return res.status(400).json({ message: 'Registered mobile number or email is required.' });
+    }
+    if (typeof otpVerificationToken !== 'string' || !otpVerificationToken) {
+      return res.status(403).json({ message: 'OTP verification is required before resetting your password.' });
+    }
+
+    const cleanPh = phone ? phone.trim() : null;
+    const normEmail = email ? normalizeEmail(email) : null;
+    const targetRole = typeof role === 'string' && (role === 'artist' || role === 'buyer') ? role : undefined;
+
+    let verifiedOtpJti: string | undefined;
+    try {
+      const decoded = jwt.verify(otpVerificationToken, JWT_SECRET) as {
+        otpVerified?: boolean;
+        identifier?: string;
+        jti?: string;
+      };
+      if (!decoded?.otpVerified || !decoded?.identifier || isOtpTokenConsumed(decoded.jti)) {
+        return res.status(403).json({
+          message: 'Invalid or already used OTP verification proof. Please verify OTP again.'
+        });
+      }
+      const matchesSubmitted = cleanPh
+        ? phoneMatches(decoded.identifier, cleanPh)
+        : normEmail
+          ? normalizeEmail(decoded.identifier) === normEmail
+          : false;
+      if (!matchesSubmitted) {
+        return res.status(403).json({
+          message: 'Verified phone/email does not match the account identifier. Please re-verify OTP.'
+        });
+      }
+      verifiedOtpJti = decoded.jti;
+    } catch {
+      return res.status(403).json({
+        message: 'OTP verification expired or invalid. Please verify your OTP again.'
+      });
+    }
+
+    const isDemoBuyer =
+      (!targetRole || targetRole === 'buyer') &&
+      ((cleanPh && cleanDigits(cleanPh).endsWith('9876543210')) || normEmail === 'ananya.buyer@artisanhub.in');
+    const isDemoArtist =
+      (!targetRole || targetRole === 'artist') &&
+      ((cleanPh && cleanDigits(cleanPh).endsWith('9845011223')) || normEmail === 'rohan.artist@artisanhub.in');
+
+    if (isDemoBuyer || isDemoArtist) {
+      const demoId = isDemoArtist ? 'usr-art-1' : 'usr-101';
+      const hashed = await bcrypt.hash(newPassword, 10);
+      demoPasswordOverrides.set(demoId, hashed);
+      consumeOtpToken(verifiedOtpJti);
+      return res.json({
+        ok: true,
+        message: 'Password reset successfully! Please sign in with your new password.'
+      });
+    }
+
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({
+          message: 'MongoDB Atlas is temporarily unavailable. Please retry in a moment.'
+        });
+      }
+      const memUser = memStore.users.find(
+        (u) =>
+          (!targetRole || u.role === targetRole) &&
+          ((cleanPh && phoneMatches(u.phone, cleanPh)) || (normEmail && u.email === normEmail))
+      );
+      if (!memUser) {
+        return res.status(404).json({
+          message: `No ${targetRole || ''} account found for this ${cleanPh ? 'mobile number' : 'email'}. Please register first.`
+        });
+      }
+      memUser.password = await bcrypt.hash(newPassword, 10);
+      memUser.isVerified = true;
+      consumeOtpToken(verifiedOtpJti);
+      return res.json({
+        ok: true,
+        message: 'Password reset successfully! Please sign in with your new password.'
+      });
+    }
+
+    const query: any = {};
+    if (targetRole) query.role = targetRole;
+    if (cleanPh) {
+      const digits = cleanDigits(cleanPh);
+      const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+      if (last10.length > 0) {
+        const flexibleRegex = last10.split('').join('[\\s-]*');
+        query.$or = [
+          { phone: cleanPh },
+          { phone: { $regex: flexibleRegex + '$', $options: 'i' } }
+        ];
+      } else {
+        query.phone = cleanPh;
+      }
+    } else if (normEmail) {
+      query.email = normEmail;
+    }
+
+    const user = await User.findOne(query);
+    if (!user) {
+      return res.status(404).json({
+        message: `No ${targetRole || ''} account found for this ${cleanPh ? 'mobile number' : 'email'}. Please register first.`
+      });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.isVerified = true;
+    await user.save();
+    consumeOtpToken(verifiedOtpJti);
+
+    return res.json({
+      ok: true,
+      message: 'Password reset successfully! Please sign in with your new password.'
+    });
+  } catch (err: any) {
+    console.error('Reset password error:', err);
+    return res.status(500).json({ message: err.message || 'Failed to reset password.' });
+  }
+});
+
 app.post('/api/auth/login', async (req: Request, res: Response) => {
   try {
     const { phone, email, password, role } = req.body;
 
-    if (!password) {
+    if (typeof password !== 'string' || !password) {
       return res.status(400).json({ message: 'Password is required' });
+    }
+    if ((phone !== undefined && typeof phone !== 'string') || (email !== undefined && typeof email !== 'string')) {
+      return res.status(400).json({ message: 'Invalid phone or email format' });
     }
     if (!phone && !email) {
       return res.status(400).json({ message: 'Phone or Email is required' });
@@ -1024,12 +1190,21 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     const normEmail = email ? normalizeEmail(email) : '';
     const cleanPh = phone ? phone.trim() : '';
 
+    const demoBuyerTarget = cleanDigits(cleanPh) === '9876543210' || normEmail === 'ananya.buyer@artisanhub.in';
+    const demoArtistTarget = cleanDigits(cleanPh) === '9845011223' || normEmail === 'rohan.artist@artisanhub.in';
+    const buyerResetHash = demoPasswordOverrides.get('usr-101');
+    const artistResetHash = demoPasswordOverrides.get('usr-art-1');
+
     const isDemoBuyer =
-      (cleanDigits(cleanPh) === '9876543210' || normEmail === 'ananya.buyer@artisanhub.in') &&
-      (password === 'buyer123' || password === 'demo123');
+      demoBuyerTarget &&
+      (buyerResetHash
+        ? await bcrypt.compare(password, buyerResetHash)
+        : password === 'buyer123' || password === 'demo123');
     const isDemoArtist =
-      (cleanDigits(cleanPh) === '9845011223' || normEmail === 'rohan.artist@artisanhub.in') &&
-      (password === 'artist123' || password === 'demo123');
+      demoArtistTarget &&
+      (artistResetHash
+        ? await bcrypt.compare(password, artistResetHash)
+        : password === 'artist123' || password === 'demo123');
 
     if (isDemoBuyer || isDemoArtist) {
       const demoRole = isDemoArtist ? 'artist' : 'buyer';
@@ -1489,12 +1664,36 @@ app.post('/api/bids', async (req: Request, res: Response) => {
       }
       const target = memStore.requests.find((r) => r.id === requestId || r._id === requestId);
       if (!target) return res.status(404).json({ message: 'Custom request not found' });
+      if (target.status !== 'open') {
+        return res.status(409).json({ message: 'Bidding is closed because a proposal has already been accepted.' });
+      }
+      const isOwnDemand =
+        (target.buyerId && String(target.buyerId).trim() === String(authUser.id).trim()) ||
+        (!target.buyerId && target.buyerName && authUser.name && target.buyerName.trim().toLowerCase() === authUser.name.trim().toLowerCase());
+      if (isOwnDemand) {
+        return res.status(403).json({ message: 'You cannot place a bid on your own custom demand.' });
+      }
       target.bids = [bidObj, ...(target.bids || [])];
       return res.status(201).json(bidObj);
     }
 
     if (!requestId || !mongoose.Types.ObjectId.isValid(requestId)) {
       return res.status(400).json({ message: 'Valid request ID is required' });
+    }
+
+    const existingReq = await CustomRequest.findById(requestId);
+    if (!existingReq) return res.status(404).json({ message: 'Custom request not found' });
+    if (existingReq.status !== 'open') {
+      return res.status(409).json({ message: 'Bidding is closed because a proposal has already been accepted.' });
+    }
+    const isOwnDemand =
+      (existingReq.buyerId && String(existingReq.buyerId).trim() === String(authUser.id).trim()) ||
+      (!existingReq.buyerId &&
+        existingReq.buyerName &&
+        authUser.name &&
+        existingReq.buyerName.trim().toLowerCase() === authUser.name.trim().toLowerCase());
+    if (isOwnDemand) {
+      return res.status(403).json({ message: 'You cannot place a bid on your own custom demand.' });
     }
 
     const updatedReq = await CustomRequest.findByIdAndUpdate(
@@ -1590,6 +1789,90 @@ app.patch('/api/custom-requests/:reqId/bids/:bidId/accept', async (req: Request,
     return res.json({ status: customReq.status, bids: customReq.bids });
   } catch (err: any) {
     return res.status(400).json({ message: err.message });
+  }
+});
+
+app.delete('/api/custom-requests/:reqId/bids/:bidId', async (req: Request, res: Response) => {
+  try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ message: 'Please sign in to delete a bid.' });
+    }
+
+    const { reqId, bidId } = req.params;
+    const isPosterOfBid = (bid: { artistId?: string; artistName?: string }) => {
+      if (bid.artistId && String(bid.artistId).trim()) {
+        return String(bid.artistId).trim() === String(authUser.id).trim();
+      }
+      return (
+        Boolean(bid.artistName && authUser.name) &&
+        bid.artistName!.trim().toLowerCase() === authUser.name.trim().toLowerCase()
+      );
+    };
+
+    const ready = await ensureMongoReady();
+    if (!ready) {
+      if (MONGO_URI) {
+        return res.status(503).json({ message: 'MongoDB Atlas is temporarily unavailable.' });
+      }
+      const customReq = memStore.requests.find((r) => r.id === reqId || r._id === reqId);
+      if (!customReq) return res.status(404).json({ message: 'Request not found' });
+
+      const targetBid = (customReq.bids || []).find(
+        (b: any) => String(b.id || b._id || '') === String(bidId)
+      );
+      if (!targetBid) return res.status(404).json({ message: 'Proposal not found' });
+
+      if (!isPosterOfBid(targetBid)) {
+        return res.status(403).json({
+          message: 'Only the artist who submitted this proposal can delete it.'
+        });
+      }
+
+      if (customReq.status !== 'open' || targetBid.status === 'Accepted') {
+        return res.status(409).json({
+          message: 'Cannot delete a bid after a proposal has been accepted.'
+        });
+      }
+
+      customReq.bids = (customReq.bids || []).filter(
+        (b: any) => String(b.id || b._id || '') !== String(bidId)
+      );
+      return res.json({ ok: true, bids: customReq.bids });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(reqId)) {
+      return res.status(400).json({ message: 'Invalid request ID' });
+    }
+
+    const customReq = await CustomRequest.findById(reqId);
+    if (!customReq) return res.status(404).json({ message: 'Request not found' });
+
+    const targetBid = (customReq.bids || []).find(
+      (b: any) => String(b.id || b._id || '') === String(bidId)
+    );
+    if (!targetBid) return res.status(404).json({ message: 'Proposal not found' });
+
+    if (!isPosterOfBid(targetBid)) {
+      return res.status(403).json({
+        message: 'Only the artist who submitted this proposal can delete it.'
+      });
+    }
+
+    if (customReq.status !== 'open' || targetBid.status === 'Accepted') {
+      return res.status(409).json({
+        message: 'Cannot delete a bid after a proposal has been accepted.'
+      });
+    }
+
+    customReq.bids = (customReq.bids || []).filter(
+      (b: any) => String(b.id || b._id || '') !== String(bidId)
+    );
+    await customReq.save();
+
+    return res.json({ ok: true, bids: customReq.bids });
+  } catch (err: any) {
+    return res.status(400).json({ message: err.message || 'Failed to delete bid.' });
   }
 });
 
