@@ -45,6 +45,42 @@ function getMsg91Config() {
 app.use(cors());
 app.use(express.json());
 
+const DEFAULT_ARTWORK_IMAGE =
+  'https://images.unsplash.com/photo-1547891654-e66ed7ebb968?auto=format&fit=crop&w=800&q=80';
+const DEFAULT_AUCTION_IMAGE =
+  'https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?auto=format&fit=crop&w=800&q=80';
+
+function normalizeArtworkImageUrl(rawUrl?: string, fallback = DEFAULT_ARTWORK_IMAGE): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return fallback;
+
+  // Unwrap Google Images search result links (?imgurl=...) to the actual image URL
+  if (/google\.[^/]+\/imgres/i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const inner = parsed.searchParams.get('imgurl');
+      if (inner && /^https?:\/\//i.test(inner)) {
+        return inner;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // Replace known 404 Unsplash URLs from earlier seed templates
+  if (trimmed.includes('photo-1579783902614-a3fb3927b675')) {
+    return DEFAULT_ARTWORK_IMAGE;
+  }
+  if (trimmed.includes('photo-1561839561-b13bcfe95249')) {
+    return DEFAULT_AUCTION_IMAGE;
+  }
+
+  if (/^(https?:\/\/|\/|data:image\/)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return fallback;
+}
+
 const SEED_ARTWORKS = [
   {
     title: 'Sunset over Western Ghats',
@@ -54,7 +90,7 @@ const SEED_ARTWORKS = [
     medium: 'Canvas & Oil',
     dimensions: '24x36 in',
     location: 'Indiranagar, Bengaluru',
-    imageUrl: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80',
+    imageUrl: DEFAULT_ARTWORK_IMAGE,
     description:
       'Hand-painted serene sunset depiction of the Western Ghats range using thick palette knife technique with high-grade European pigments.',
     likes: 42,
@@ -167,7 +203,7 @@ const SEED_AUCTIONS = [
     currentBid: 28000,
     startingBid: 15000,
     endTime: new Date(Date.now() + 86400000),
-    imageUrl: 'https://images.unsplash.com/photo-1561839561-b13bcfe95249?auto=format&fit=crop&w=800&q=80',
+    imageUrl: DEFAULT_AUCTION_IMAGE,
     bidsCount: 12
   },
   {
@@ -962,7 +998,7 @@ app.get('/api/artworks', async (_req: Request, res: Response) => {
       medium: art.medium || 'Canvas & Mixed Medium',
       dimensions: art.dimensions || 'Custom Size',
       description: art.description,
-      imageUrl: art.imageUrl,
+      imageUrl: normalizeArtworkImageUrl(art.imageUrl),
       location: art.location,
       likes: art.likes || 0,
       featured: art.featured || false,
@@ -979,8 +1015,8 @@ app.post('/api/artworks', async (req: Request, res: Response) => {
   try {
     const { title, artist, category, price, medium, dimensions, description, imageUrl, location } = req.body;
 
-    if (!title || !price || !category) {
-      return res.status(400).json({ message: 'Title, category, and price are required' });
+    if (!title || !price || !category || Number(price) <= 0) {
+      return res.status(400).json({ message: 'Valid title, category, and positive price are required' });
     }
 
     const artworkPayload = {
@@ -991,10 +1027,7 @@ app.post('/api/artworks', async (req: Request, res: Response) => {
       medium: medium ? medium.trim() : 'Canvas & Acrylic',
       dimensions: dimensions ? dimensions.trim() : 'Standard',
       description: description ? description.trim() : '',
-      imageUrl:
-        imageUrl && imageUrl.trim().length > 5
-          ? imageUrl.trim()
-          : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80',
+      imageUrl: normalizeArtworkImageUrl(imageUrl),
       location: location ? location.trim() : 'Bengaluru Local',
       likes: 1,
       featured: false
@@ -1035,6 +1068,10 @@ app.patch('/api/artworks/:id/like', async (req: Request, res: Response) => {
       if (!art) return res.status(404).json({ message: 'Artwork not found' });
       art.likes = Math.max(0, (art.likes || 0) + delta);
       return res.json({ id: art.id, likes: art.likes });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid artwork ID' });
     }
 
     const updated = await Artwork.findByIdAndUpdate(
@@ -1122,6 +1159,9 @@ app.post('/api/custom-requests', async (req: Request, res: Response) => {
 app.post('/api/bids', async (req: Request, res: Response) => {
   try {
     const { requestId, artistName, amount, daysEst, proposal } = req.body;
+    if (!Number(amount) || Number(amount) <= 0 || !Number(daysEst) || Number(daysEst) <= 0) {
+      return res.status(400).json({ message: 'Valid bid amount and estimated days are required' });
+    }
     const bidObj = {
       id: `bid-${Date.now()}`,
       artistName: artistName || 'Local Artisan',
@@ -1135,17 +1175,21 @@ app.post('/api/bids', async (req: Request, res: Response) => {
     const ready = await ensureMongoReady();
     if (!ready) {
       const target = memStore.requests.find((r) => r.id === requestId || r._id === requestId);
-      if (target) {
-        target.bids = [bidObj, ...(target.bids || [])];
-      }
+      if (!target) return res.status(404).json({ message: 'Custom request not found' });
+      target.bids = [bidObj, ...(target.bids || [])];
       return res.status(201).json(bidObj);
     }
 
-    if (requestId && mongoose.Types.ObjectId.isValid(requestId)) {
-      await CustomRequest.findByIdAndUpdate(requestId, {
-        $push: { bids: bidObj }
-      });
+    if (!requestId || !mongoose.Types.ObjectId.isValid(requestId)) {
+      return res.status(400).json({ message: 'Valid request ID is required' });
     }
+
+    const updatedReq = await CustomRequest.findByIdAndUpdate(
+      requestId,
+      { $push: { bids: bidObj } },
+      { new: true }
+    );
+    if (!updatedReq) return res.status(404).json({ message: 'Custom request not found' });
     return res.status(201).json(bidObj);
   } catch (err: any) {
     return res.status(400).json({ message: err.message });
@@ -1212,7 +1256,7 @@ app.get('/api/auctions', async (_req: Request, res: Response) => {
         startingBid: a.startingBid,
         currentBid: a.currentBid,
         endTime: a.endTime,
-        imageUrl: a.imageUrl,
+        imageUrl: normalizeArtworkImageUrl(a.imageUrl, DEFAULT_AUCTION_IMAGE),
         bidsCount: a.bidsCount
       }))
     );
@@ -1239,6 +1283,10 @@ app.post('/api/auctions/:id/bid', async (req: Request, res: Response) => {
         currentBid: auction.currentBid,
         bidsCount: auction.bidsCount
       });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid auction ID' });
     }
 
     const auction = await Auction.findById(req.params.id);

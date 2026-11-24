@@ -14,6 +14,29 @@ import PaymentSuccessPage from './components/PaymentSuccessPage';
 // Full-Stack API Endpoint (routes through unified Express server)
 const API_BASE_URL = "/api";
 
+// Verified fallback artwork/auction images + Google imgres URL normalizer
+const DEFAULT_ARTWORK_IMAGE =
+  'https://images.unsplash.com/photo-1547891654-e66ed7ebb968?auto=format&fit=crop&w=800&q=80';
+const DEFAULT_AUCTION_IMAGE =
+  'https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?auto=format&fit=crop&w=800&q=80';
+
+const normalizeImageUrl = (rawUrl, fallback = DEFAULT_ARTWORK_IMAGE) => {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return fallback;
+  if (/google\.[^/]+\/imgres/i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const inner = parsed.searchParams.get('imgurl');
+      if (inner && /^https?:\/\//i.test(inner)) return inner;
+    } catch {
+      // fall through
+    }
+  }
+  if (trimmed.includes('photo-1579783902614-a3fb3927b675')) return DEFAULT_ARTWORK_IMAGE;
+  if (trimmed.includes('photo-1561839561-b13bcfe95249')) return DEFAULT_AUCTION_IMAGE;
+  return /^(https?:\/\/|\/|data:image\/)/i.test(trimmed) ? trimmed : fallback;
+};
+
 // INITIAL MOCK DATA SETS
 const INITIAL_ARTWORKS = [
   { 
@@ -25,7 +48,7 @@ const INITIAL_ARTWORKS = [
     medium: 'Canvas & Oil', 
     dimensions: '24x36 in', 
     location: 'Indiranagar, Bengaluru', 
-    imageUrl: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80', 
+    imageUrl: DEFAULT_ARTWORK_IMAGE, 
     description: 'Hand-painted serene sunset depiction of the Western Ghats range using thick palette knife technique with high-grade European pigments.',
     likes: 42,
     featured: true
@@ -171,7 +194,7 @@ const INITIAL_AUCTIONS = [
     currentBid: 28000, 
     startingBid: 15000, 
     endTime: new Date(Date.now() + 86400000).toISOString(), 
-    imageUrl: 'https://images.unsplash.com/photo-1561839561-b13bcfe95249?auto=format&fit=crop&w=800&q=80', 
+    imageUrl: DEFAULT_AUCTION_IMAGE, 
     bidsCount: 12,
     description: 'Lost-wax casting method heritage sculpture with custom serial engraving and physical certificate of authenticity signed by artisan guild.'
   },
@@ -220,7 +243,9 @@ export default function App() {
       const cached = localStorage.getItem('artisanhub_products_cache');
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((art) => ({ ...art, imageUrl: normalizeImageUrl(art.imageUrl) }));
+        }
       }
     } catch (e) {
       console.warn('Error reading cached artworks:', e);
@@ -313,6 +338,7 @@ export default function App() {
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [isSubmittingArt, setIsSubmittingArt] = useState(false);
+  const [bioDraft, setBioDraft] = useState(() => currentUser?.bio || '');
 
   // Database Connection Info
   const [dbStatus, setDbStatus] = useState({ connected: false, mode: 'connecting', database: 'artisanhub', checked: false });
@@ -449,19 +475,20 @@ export default function App() {
 
   // Filter & Sort artworks catalog
   const filteredProducts = products.filter(item => {
+    const q = searchQuery.toLowerCase();
     const matchesSearch = 
-      item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      item.artist.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (item.location && item.location.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (item.medium && item.medium.toLowerCase().includes(searchQuery.toLowerCase()));
+      (item.title || '').toLowerCase().includes(q) || 
+      (item.artist || '').toLowerCase().includes(q) ||
+      (item.category || '').toLowerCase().includes(q) ||
+      (item.location && item.location.toLowerCase().includes(q)) ||
+      (item.medium && item.medium.toLowerCase().includes(q));
     const matchesCategory = selectedCategory === 'All' || item.category === selectedCategory;
     const matchesArtist = selectedArtist === 'All' || item.artist === selectedArtist;
-    const matchesPrice = item.price <= maxPriceFilter;
+    const matchesPrice = Number(item.price || 0) <= maxPriceFilter;
     return matchesSearch && matchesCategory && matchesArtist && matchesPrice;
   }).sort((a, b) => {
-    if (sortBy === 'price-asc') return a.price - b.price;
-    if (sortBy === 'price-desc') return b.price - a.price;
+    if (sortBy === 'price-asc') return Number(a.price || 0) - Number(b.price || 0);
+    if (sortBy === 'price-desc') return Number(b.price || 0) - Number(a.price || 0);
     if (sortBy === 'likes-desc') return (b.likes || 0) - (a.likes || 0);
     return 0;
   });
@@ -469,6 +496,7 @@ export default function App() {
   // Successful auth callback from AuthPage - Saves session persistently & syncs live DB
   const handleAuthSuccess = (userData) => {
     setCurrentUser(userData);
+    setBioDraft(userData?.bio || '');
     setIsAuthenticated(true);
     setIsAuthViewOpen(false);
     try {
@@ -548,9 +576,13 @@ export default function App() {
     });
   };
 
-  // Submit new artwork listing - Persists directly to MongoDB Atlas
+  // Submit new artwork listing - Persists directly to backend
   const handleAddArtworkSubmit = async (e) => {
     e.preventDefault();
+    if (!Number(newArtForm.price) || Number(newArtForm.price) <= 0) {
+      showNotification('Please enter a valid positive price in ₹ INR.');
+      return;
+    }
     setIsSubmittingArt(true);
 
     const artPayload = {
@@ -561,7 +593,7 @@ export default function App() {
       medium: newArtForm.medium ? newArtForm.medium.trim() : 'Canvas & Oil',
       dimensions: newArtForm.dimensions ? newArtForm.dimensions.trim() : 'Custom Size',
       description: newArtForm.description ? newArtForm.description.trim() : '',
-      imageUrl: newArtForm.imageUrl ? newArtForm.imageUrl.trim() : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80',
+      imageUrl: normalizeImageUrl(newArtForm.imageUrl),
       location: (currentUser.location || 'Bengaluru Local').trim(),
       likes: 1,
       featured: false
@@ -577,18 +609,20 @@ export default function App() {
       const data = await res.json().catch(() => ({}));
 
       if (res.ok && data) {
-        // Saved to MongoDB Atlas successfully
-        setProducts(prev => [data, ...prev.filter(p => (p.id || p._id) !== (data.id || data._id))]);
-        try {
-          const cached = [data, ...products];
-          localStorage.setItem('artisanhub_products_cache', JSON.stringify(cached));
-        } catch (e) {
-          console.warn('Failed to cache new artwork:', e);
-        }
+        const savedArt = { ...data, imageUrl: normalizeImageUrl(data.imageUrl) };
+        setProducts(prev => {
+          const next = [savedArt, ...prev.filter(p => (p.id || p._id) !== (savedArt.id || savedArt._id))];
+          try {
+            localStorage.setItem('artisanhub_products_cache', JSON.stringify(next));
+          } catch (err) {
+            console.warn('Failed to cache new artwork:', err);
+          }
+          return next;
+        });
 
         setIsAddArtOpen(false);
         setNewArtForm({ title: '', category: 'Oil Painting', price: '', medium: '', dimensions: '', description: '', imageUrl: '' });
-        showNotification("Artwork saved to MongoDB Atlas & now live across all devices!");
+        showNotification("Artwork published & now live across ArtisanHub!");
         checkDbStatus();
       } else {
         showNotification(`Could not save artwork to database: ${data.message || 'Server error'}`);
@@ -600,15 +634,22 @@ export default function App() {
     }
   };
 
-  // Submit custom demand request -> Persists to MongoDB Atlas
+  // Submit custom demand request -> Persists to backend
   const handleCreateRequestSubmit = async (e) => {
     e.preventDefault();
+    const minBudget = Number(newReqForm.budgetMin);
+    const maxBudget = Number(newReqForm.budgetMax);
+    if (minBudget <= 0 || maxBudget < minBudget) {
+      showNotification('Max budget must be greater than or equal to Min budget.');
+      return;
+    }
+
     const reqData = {
       buyerName: currentUser.name || 'Art Patron',
       title: newReqForm.title,
       category: newReqForm.category,
-      budgetMin: Number(newReqForm.budgetMin),
-      budgetMax: Number(newReqForm.budgetMax),
+      budgetMin: minBudget,
+      budgetMax: maxBudget,
       deadline: newReqForm.deadline,
       description: newReqForm.description,
       location: currentUser.location || 'Bengaluru Local',
@@ -702,26 +743,41 @@ export default function App() {
   // Buyer accepts an artist's proposal bid
   const handleAcceptBid = async (reqId, bidId, artistName) => {
     try {
-      await fetch(`${API_BASE_URL}/custom-requests/${reqId}/bids/${bidId}/accept`, {
+      const res = await fetch(`${API_BASE_URL}/custom-requests/${reqId}/bids/${bidId}/accept`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' }
       });
-    } catch {
-      // ignore transient error
-    }
-    setBuyerRequests(prev => prev.map(req => {
-      const targetId = req.id || req._id;
-      if (targetId === reqId) {
-        const updatedBids = req.bids.map(b => {
-          if (b.id === bidId) {
-            return { ...b, status: 'Accepted' };
-          }
-          return { ...b, status: b.status === 'Accepted' ? 'Accepted' : 'Pending' };
-        });
-        return { ...req, status: 'in-progress', bids: updatedBids };
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        showNotification(errData.message || 'Could not accept proposal. Please try again.');
+        return;
       }
-      return req;
-    }));
+    } catch (err) {
+      showNotification(`Network error accepting proposal: ${err.message || 'Try again'}`);
+      return;
+    }
+
+    setBuyerRequests(prev => {
+      const updated = prev.map(req => {
+        const targetId = req.id || req._id;
+        if (targetId === reqId) {
+          const updatedBids = (req.bids || []).map(b => {
+            if (b.id === bidId) {
+              return { ...b, status: 'Accepted' };
+            }
+            return { ...b, status: b.status === 'Accepted' ? 'Accepted' : 'Pending' };
+          });
+          return { ...req, status: 'in-progress', bids: updatedBids };
+        }
+        return req;
+      });
+      try {
+        localStorage.setItem('artisanhub_requests_cache', JSON.stringify(updated));
+      } catch (e) {
+        console.warn(e);
+      }
+      return updated;
+    });
     showNotification(`Proposal from ${artistName} accepted! Collaboration initiated.`);
   };
 
@@ -960,9 +1016,12 @@ export default function App() {
           {/* Zone 2: Navigation Links */}
           <nav className="hidden lg:flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
             <button
-              onClick={() => setActiveTab('marketplace')}
+              onClick={() => {
+                setActiveTab('marketplace');
+                setIsAuthViewOpen(false);
+              }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'marketplace' 
+                activeTab === 'marketplace' && !isAuthViewOpen
                   ? 'bg-amber-400 text-slate-950 shadow-sm' 
                   : 'text-slate-400 hover:text-slate-200'
               }`}
@@ -970,9 +1029,12 @@ export default function App() {
               Art Gallery
             </button>
             <button
-              onClick={() => setActiveTab('demands')}
+              onClick={() => {
+                setActiveTab('demands');
+                setIsAuthViewOpen(false);
+              }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'demands' 
+                activeTab === 'demands' && !isAuthViewOpen
                   ? 'bg-amber-400 text-slate-950 shadow-sm' 
                   : 'text-slate-400 hover:text-slate-200'
               }`}
@@ -980,9 +1042,12 @@ export default function App() {
               Custom Demands & Bids
             </button>
             <button
-              onClick={() => setActiveTab('auctions')}
+              onClick={() => {
+                setActiveTab('auctions');
+                setIsAuthViewOpen(false);
+              }}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === 'auctions' 
+                activeTab === 'auctions' && !isAuthViewOpen
                   ? 'bg-amber-400 text-slate-950 shadow-sm' 
                   : 'text-slate-400 hover:text-slate-200'
               }`}
@@ -1137,8 +1202,10 @@ export default function App() {
         </div>
       </header>
 
-      {/* HERO BANNER SECTION (Hidden on dedicated Checkout & Payment Success pages) */}
-      {!isAuthViewOpen && activeTab !== 'checkout' && activeTab !== 'payment-success' && (
+      {/* HERO BANNER SECTION (Only shown on Art Gallery & Custom Demands and Bids tabs) */}
+      {!isAuthViewOpen && (activeTab === 'marketplace' || activeTab === 'demands') && (() => {
+        const featuredArt = products.find((p) => p.featured) || products[0] || INITIAL_ARTWORKS[0];
+        return (
       <section className="relative overflow-hidden border-b border-slate-800/80 bg-gradient-to-b from-slate-900/60 via-slate-950 to-slate-950">
         {/* Subtle decorative background ambient glow */}
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -1168,7 +1235,13 @@ export default function App() {
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <button
                   onClick={() => {
-                    setCurrentUser(prev => ({ ...prev, role: 'buyer' }));
+                    setCurrentUser(prev => {
+                      const updated = { ...prev, role: 'buyer' };
+                      try {
+                        localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
+                      } catch {}
+                      return updated;
+                    });
                     setIsCreateRequestOpen(true);
                   }}
                   className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-6 py-3 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 shadow-lg shadow-amber-400/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
@@ -1178,7 +1251,13 @@ export default function App() {
 
                 <button
                   onClick={() => {
-                    setCurrentUser(prev => ({ ...prev, role: 'artist' }));
+                    setCurrentUser(prev => {
+                      const updated = { ...prev, role: 'artist' };
+                      try {
+                        localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
+                      } catch {}
+                      return updated;
+                    });
                     setIsAddArtOpen(true);
                   }}
                   className="bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white px-6 py-3 rounded-xl text-xs sm:text-sm font-semibold border border-slate-700/80 flex items-center gap-2 transition-all hover:scale-[1.02]"
@@ -1209,8 +1288,12 @@ export default function App() {
               <div className="relative group bg-slate-900/90 border border-slate-800 rounded-3xl overflow-hidden p-3 shadow-2xl shadow-slate-950/80 transition-all hover:border-slate-700">
                 <div className="relative h-72 sm:h-80 rounded-2xl overflow-hidden bg-slate-950">
                   <img 
-                    src={INITIAL_ARTWORKS[0].imageUrl} 
-                    alt="Curated Artwork of the Week" 
+                    src={featuredArt.imageUrl || '/art-fallback.svg'} 
+                    alt={featuredArt.title || 'Curated Artwork of the Week'} 
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = '/art-fallback.svg';
+                    }}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent pointer-events-none" />
@@ -1221,25 +1304,25 @@ export default function App() {
                       <Sparkles className="w-3 h-3" /> Featured of the Week
                     </span>
                     <span className="backdrop-blur-md bg-slate-950/70 border border-white/10 text-slate-200 text-[10px] font-medium px-2.5 py-1 rounded-full flex items-center gap-1">
-                      <MapPin className="w-3 h-3 text-amber-400" /> Indiranagar
+                      <MapPin className="w-3 h-3 text-amber-400" /> {(featuredArt.location || 'Bengaluru').split(',')[0]}
                     </span>
                   </div>
 
                   {/* Bottom Image Info */}
                   <div className="absolute bottom-3 left-3 right-3 space-y-1">
-                    <h3 className="text-base font-bold text-slate-100">{INITIAL_ARTWORKS[0].title}</h3>
-                    <p className="text-xs text-slate-300">By {INITIAL_ARTWORKS[0].artist} · {INITIAL_ARTWORKS[0].medium}</p>
+                    <h3 className="text-base font-bold text-slate-100">{featuredArt.title}</h3>
+                    <p className="text-xs text-slate-300">By {featuredArt.artist} · {featuredArt.medium}</p>
                   </div>
                 </div>
 
                 <div className="p-3 pt-4 flex items-center justify-between">
                   <div>
                     <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold block">Artisan Asking Price</span>
-                    <span className="text-xl font-black text-amber-400 tabular-nums">{formatPrice(INITIAL_ARTWORKS[0].price)}</span>
+                    <span className="text-xl font-black text-amber-400 tabular-nums">{formatPrice(featuredArt.price)}</span>
                   </div>
 
                   <button 
-                    onClick={() => setQuickViewProduct(INITIAL_ARTWORKS[0])}
+                    onClick={() => setQuickViewProduct(featuredArt)}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700"
                   >
                     <Eye className="w-3.5 h-3.5 text-amber-400" /> Quick View
@@ -1251,7 +1334,8 @@ export default function App() {
           </div>
         </div>
       </section>
-      )}
+        );
+      })()}
 
       {/* MAIN CONTAINER CONTENT */}
       <main className="max-w-7xl mx-auto px-4 sm:px-8 py-8">
@@ -1469,7 +1553,7 @@ export default function App() {
                                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                                     <div className="flex items-center gap-2">
                                       <div className="w-7 h-7 bg-amber-400/10 text-amber-400 rounded-lg flex items-center justify-center font-bold text-xs">
-                                        {bid.artistName.charAt(0)}
+                                        {(bid.artistName || 'A').charAt(0)}
                                       </div>
                                       <div>
                                         <div className="font-semibold text-xs sm:text-sm text-slate-200">{bid.artistName}</div>
@@ -1502,7 +1586,7 @@ export default function App() {
                                   </p>
 
                                   {/* Buyer Accept Action */}
-                                  {currentUser.role === 'buyer' && !isAccepted && (
+                                  {currentUser.role === 'buyer' && isOpen && !isAccepted && (
                                     <div className="flex justify-end pt-1">
                                       <button
                                         onClick={() => handleAcceptBid(req.id || req._id, bid.id, bid.artistName)}
@@ -1543,7 +1627,15 @@ export default function App() {
               {auctions.map(auc => (
                 <div key={auc.id || auc._id} className="bg-slate-900/90 border border-slate-800 rounded-3xl overflow-hidden p-5 flex flex-col sm:flex-row gap-5 shadow-xl hover:border-slate-700 transition">
                   <div className="relative w-full sm:w-48 h-52 sm:h-auto rounded-2xl overflow-hidden bg-slate-950 shrink-0">
-                    <img src={auc.imageUrl} alt={auc.title} className="w-full h-full object-cover" />
+                    <img
+                      src={auc.imageUrl || '/art-fallback.svg'}
+                      alt={auc.title}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = '/art-fallback.svg';
+                      }}
+                      className="w-full h-full object-cover"
+                    />
                     <div className="absolute top-2.5 left-2.5 backdrop-blur-md bg-slate-950/75 border border-white/10 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-md">
                       LIVE
                     </div>
@@ -1606,7 +1698,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
                   <div className="w-16 h-16 bg-gradient-to-tr from-amber-500 to-amber-300 rounded-2xl flex items-center justify-center text-slate-950 font-black text-2xl shadow-lg shadow-amber-500/20">
-                    {currentUser.name.charAt(0)}
+                    {(currentUser.name || 'A').charAt(0)}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
@@ -1616,7 +1708,7 @@ export default function App() {
                       </span>
                     </div>
                     <p className="text-xs text-slate-400 flex items-center gap-1 mt-1">
-                      <MapPin className="w-3.5 h-3.5 text-amber-400" /> {currentUser.location} · Member since {currentUser.joinedDate}
+                      <MapPin className="w-3.5 h-3.5 text-amber-400" /> {currentUser.location || 'Bengaluru Local'} · Member since {currentUser.joinedDate || '2026'}
                     </p>
                   </div>
                 </div>
@@ -1631,14 +1723,16 @@ export default function App() {
 
               <div className="space-y-3 pt-6 border-t border-slate-800/80">
                 <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-emerald-400" /> Phone Verification & Authenticity
+                  <Shield className="w-4 h-4 text-emerald-400" /> Identity Verification & Authenticity
                 </h3>
                 
                 <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs font-semibold text-slate-200">{currentUser.phone}</p>
+                    <p className="text-xs font-semibold text-slate-200">
+                      {currentUser.phone || currentUser.email || 'Not provided'}
+                    </p>
                     <p className="text-[11px] text-emerald-400 flex items-center gap-1.5 mt-0.5 font-medium">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Mobile Number Authenticated with 2FA OTP
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Authenticated with OTP Verification
                     </p>
                   </div>
                   <button 
@@ -1653,14 +1747,24 @@ export default function App() {
               <div className="space-y-2">
                 <label className="text-xs text-slate-400 font-semibold block">Artisan & Collector Bio</label>
                 <textarea 
-                  defaultValue={currentUser.bio} 
+                  value={bioDraft}
+                  onChange={(e) => setBioDraft(e.target.value)}
                   rows={3}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-amber-400 transition"
                 ></textarea>
               </div>
 
               <button 
-                onClick={() => showNotification("Profile information updated successfully!")}
+                onClick={() => {
+                  setCurrentUser(prev => {
+                    const updated = { ...prev, bio: bioDraft };
+                    try {
+                      localStorage.setItem('artisanhub_current_user', JSON.stringify(updated));
+                    } catch {}
+                    return updated;
+                  });
+                  showNotification("Profile information updated successfully!");
+                }}
                 className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-6 py-2.5 rounded-xl text-xs font-bold transition shadow-md shadow-amber-400/20"
               >
                 Save Profile Changes
@@ -1798,8 +1902,12 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
             <div className="relative h-72 sm:h-80 bg-slate-950">
               <img 
-                src={quickViewProduct.imageUrl} 
+                src={quickViewProduct.imageUrl || '/art-fallback.svg'} 
                 alt={quickViewProduct.title} 
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = '/art-fallback.svg';
+                }}
                 className="w-full h-full object-cover"
               />
               <button 
@@ -1911,8 +2019,12 @@ export default function App() {
                         className="flex items-center gap-3.5 bg-slate-950 border border-slate-800 p-3 rounded-2xl"
                       >
                         <img
-                          src={item.imageUrl}
+                          src={item.imageUrl || '/art-fallback.svg'}
                           alt={item.title}
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = '/art-fallback.svg';
+                          }}
                           className="w-16 h-16 object-cover rounded-xl bg-slate-900 shrink-0"
                         />
                         <div className="flex-1 min-w-0">
@@ -2029,6 +2141,7 @@ export default function App() {
                   <label className="text-xs text-slate-400 font-semibold block mb-1">Price (₹ INR) *</label>
                   <input 
                     required 
+                    min={1}
                     type="number" 
                     placeholder="e.g. 8500" 
                     value={newArtForm.price} 

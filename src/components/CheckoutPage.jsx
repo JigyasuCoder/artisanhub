@@ -200,8 +200,12 @@ export default function CheckoutPage({
                       className="flex flex-col sm:flex-row gap-4 bg-slate-950/90 border border-slate-800/80 p-3.5 rounded-2xl"
                     >
                       <img
-                        src={item.imageUrl}
+                        src={item.imageUrl || '/art-fallback.svg'}
                         alt={item.title}
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src = '/art-fallback.svg';
+                        }}
                         className="w-full sm:w-24 h-36 sm:h-24 object-cover rounded-xl bg-slate-900 shrink-0"
                       />
                       <div className="flex-1 flex flex-col justify-between space-y-2">

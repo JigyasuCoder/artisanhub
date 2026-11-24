@@ -143,8 +143,12 @@ export default function PaymentSuccessPage({ receipt, onBackToGallery, onViewPro
                 className="flex items-center gap-4 bg-slate-950/70 border border-slate-800/80 p-3 rounded-2xl"
               >
                 <img
-                  src={item.imageUrl}
+                  src={item.imageUrl || '/art-fallback.svg'}
                   alt={item.title}
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = '/art-fallback.svg';
+                  }}
                   className="w-16 h-16 object-cover rounded-xl bg-slate-900 shrink-0"
                 />
                 <div className="flex-1 min-w-0">

@@ -64,8 +64,12 @@ export default function ArtGalleryGrid({
                 onClick={() => onQuickView && onQuickView(art)}
               >
                 <img
-                  src={art.imageUrl}
+                  src={art.imageUrl || '/art-fallback.svg'}
                   alt={art.title}
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = '/art-fallback.svg';
+                  }}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
                 />
 

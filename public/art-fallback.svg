@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="800" y2="600" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="50%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="42%" r="48%">
+      <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#bg)"/>
+  <rect width="800" height="600" fill="url(#glow)"/>
+  <rect x="260" y="135" width="280" height="240" rx="22" stroke="#fbbf24" stroke-opacity="0.45" stroke-width="3" fill="#0f172a" fill-opacity="0.65"/>
+  <circle cx="345" cy="215" r="24" fill="#fbbf24" fill-opacity="0.8"/>
+  <path d="M285 345L365 255L420 315L465 270L515 345H285Z" fill="#f59e0b" fill-opacity="0.45"/>
+  <path d="M285 345L365 255L420 315L465 270L515 345" stroke="#fcd34d" stroke-width="3" stroke-linejoin="round"/>
+  <text x="400" y="435" text-anchor="middle" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="700">ArtisanHub Original</text>
+  <text x="400" y="470" text-anchor="middle" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="15">Handcrafted Neighborhood Artwork</text>
+</svg>
